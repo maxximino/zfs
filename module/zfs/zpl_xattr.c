@@ -82,6 +82,7 @@
 #include <sys/zfs_znode.h>
 #include <sys/vfs.h>
 #include <sys/zpl.h>
+#include <sys/zpl_posixacl.h>
 
 typedef struct xattr_filldir {
 	size_t size;
@@ -95,7 +96,6 @@ zpl_xattr_filldir(void *arg, const char *name, int name_len,
     loff_t offset, uint64_t objnum, unsigned int d_type)
 {
 	xattr_filldir_t *xf = arg;
-
 	if (!strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
 		if (!(ITOZSB(xf->inode)->z_flags & ZSB_XATTR))
 			return (0);
@@ -670,8 +670,8 @@ xattr_handler_t *zpl_xattr_handlers[] = {
 	&zpl_xattr_security_handler,
 	&zpl_xattr_trusted_handler,
 	&zpl_xattr_user_handler,
-#ifdef HAVE_POSIX_ACLS
+//#ifdef HAVE_POSIX_ACLS
 	&zpl_xattr_acl_access_handler,
-	&zpl_xattr_acl_default_handler,
-#endif /* HAVE_POSIX_ACLS */
+        &zpl_xattr_acl_default_handler,
+//#endif /* HAVE_POSIX_ACLS */
 };

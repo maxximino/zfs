@@ -52,6 +52,13 @@ fn(struct dentry *dentry, const char *name, void *buffer, size_t size,	\
 {									\
 	return __ ## fn(dentry->d_inode, name, buffer, size);		\
 }
+#define ZPL_XATTR_GET_ACL_WRAPPER(fn)					\
+static int								\
+fn(struct dentry *dentry, const char *name, void *buffer, size_t size,	\
+    int type)						\
+{									\
+	return __ ## fn(dentry->d_inode, name, buffer, size,type);		\
+}
 #else
 #define ZPL_XATTR_GET_WRAPPER(fn)					\
 static int								\
@@ -59,6 +66,7 @@ fn(struct inode *ip, const char *name, void *buffer, size_t size)	\
 {									\
 	return __ ## fn(ip, name, buffer, size);			\
 }
+//TODO: pre-2.6.33. Won't compile now.
 #endif /* HAVE_DENTRY_XATTR_GET */
 
 /*
@@ -74,6 +82,14 @@ fn(struct dentry *dentry, const char *name, const void *buffer,		\
 {									\
 	return __ ## fn(dentry->d_inode, name, buffer, size, flags);	\
 }
+#define ZPL_XATTR_SET_ACL_WRAPPER(fn)					\
+static int								\
+fn(struct dentry *dentry, const char *name, const void *buffer,		\
+    size_t size, int flags, int type)			\
+{									\
+	return __ ## fn(dentry->d_inode, name, buffer, size, flags,type);	\
+}
+
 #else
 #define ZPL_XATTR_SET_WRAPPER(fn)					\
 static int								\
@@ -82,6 +98,7 @@ fn(struct inode *ip, const char *name, const void *buffer,		\
 {									\
 	return __ ## fn(ip, name, buffer, size, flags);			\
 }
+//TODO: pre-2.6.33. Won't compile now.
 #endif /* HAVE_DENTRY_XATTR_SET */
 
 #ifdef HAVE_6ARGS_SECURITY_INODE_INIT_SECURITY

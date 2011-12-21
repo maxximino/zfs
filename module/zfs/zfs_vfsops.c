@@ -729,6 +729,8 @@ zfs_sb_setup(zfs_sb_t *zsb, boolean_t mounting)
 	error = zfs_register_callbacks(zsb);
 	if (error)
 		return (error);
+	//TODO: Is this the right place to set this flag?
+	zsb->z_sb->s_flags |= MS_POSIXACL;
 
 	/*
 	 * Set the objset user_ptr to track its zsb.

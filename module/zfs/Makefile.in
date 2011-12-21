@@ -86,6 +86,7 @@ $(MODULE)-objs += @top_srcdir@/module/zfs/zle.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_export.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_file.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_inode.o
+$(MODULE)-objs += @top_srcdir@/module/zfs/zpl_posixacl.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_super.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_xattr.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zrlock.o
