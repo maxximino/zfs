@@ -95,7 +95,8 @@ __zpl_xattr_acl_set(struct inode *ip, const char *name,
             ptr->a_perm=pa->e_perm;
             ptr++;
         }
-	posix_acl_release(acl);
+// posix_acl_release(acl); // GPL-only !!!!!!!!!!
+	
         printk("acl_type before:%i,cnt=%i\n",newacl->acl_type,newacl->acl_cnt);
         err=acl_translate(newacl,_ACL_ACE_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
         printk("acl_type after:%i,cnt=%i\n",newacl->acl_type,newacl->acl_cnt);
