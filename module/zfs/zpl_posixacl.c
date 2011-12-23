@@ -12,6 +12,67 @@
 #include "sys/zpl.h"
 #include "sys/zpl_posixacl.h"
 #include "acl_common.h"
+
+static inline int acl_from_vsecattr(acl_t**newacl, vsecattr_t* sa) {
+    acl_t* acl=NULL;
+    acl=acl_alloc(ACE_T);
+    if(acl==NULL) {
+        return -ENOMEM;
+    }
+    acl->acl_cnt=	sa->vsa_aclcnt;
+    acl->acl_aclp=	sa->vsa_aclentp;
+    acl->acl_entry_size=	sa->vsa_aclentsz;
+    *newacl=acl;
+    return 0;
+}
+static int posixacl_from_ace(struct posix_acl** newacl,acl_t* acl,int posixacl_type) {
+    struct posix_acl* pacl = NULL;
+    struct posix_acl_entry* pae=NULL;
+    aclent_t* ae;
+    int idx=0,count=0;
+    ae = acl->acl_aclp;
+    //Count the elements we're interested in. (access OR default)
+    if(posixacl_type==ACL_TYPE_DEFAULT) {
+        for(idx=0; idx<acl->acl_cnt; idx++) {
+            if(ae->a_type & ACL_DEFAULT) count++;
+            ae++;
+        }
+    }
+    else {
+        for(idx=0; idx<acl->acl_cnt; idx++) {
+            if(!(ae->a_type & ACL_DEFAULT)) count++;
+            ae++;
+        }
+    }
+    //Allocate the Posix ACL
+    pacl=posix_acl_alloc(count,GFP_NOFS);
+    if(pacl==NULL) {
+        return -ENOMEM;
+    }
+    pae=pacl->a_entries;
+    ae = acl->acl_aclp;
+    //For each element in the acl_t
+    for(idx=0; idx<acl->acl_cnt; idx++) {
+        //if we are interested in this element
+        if(posixacl_type==ACL_TYPE_DEFAULT) {
+            if(!(ae->a_type & ACL_DEFAULT)) continue;
+        }
+        else {
+            if(ae->a_type & ACL_DEFAULT) continue;
+        }
+        //copy informations from one structure to the other.
+        pae->e_id = ae->a_id;
+        pae->e_perm=    ae->a_perm ;
+        pae->e_tag=(ae->a_type&(~ACL_DEFAULT)); //Constants in Linux and Solaris for type field have different names but same numerical value. Not a clean way to deal with this, but for first tests it does its job quite well. TODO: Cleanup this.
+        pae++;
+        ae++;
+    }
+    //copy the pointer to the new Posix ACL into the calling function.
+    *newacl=pacl;
+    return 0;
+}
+
+
 static int
 __zpl_xattr_acl_get(struct inode *ip, const char *name,
                     void *value, size_t size,int type) {
@@ -19,28 +80,33 @@ __zpl_xattr_acl_get(struct inode *ip, const char *name,
     cred_t *cr;
     int err;
     acl_t * readacl;
-    printk("posix acl get. type=%i\n",type);
+    struct posix_acl* pacl = NULL;
+    //Define what we're interested in
     sa.vsa_mask=VSA_ACE|VSA_ACECNT|VSA_ACE_ACLFLAGS|VSA_ACE_ALLTYPES;
     cr=CRED();
     crhold(cr);
+    //Read the ACL (NFSv4-style into a vsecattr)
     err=zfs_getacl(ITOZ(ip),&sa,FALSE,cr);
     crfree(cr);
-         printk("getfacl retvalue=%i\n",err);
-        if(err) {
-            return -err;
-        }
-
- readacl=acl_alloc(ACE_T);
-    readacl->acl_cnt=	sa.vsa_aclcnt;
-    readacl->acl_aclp=	sa.vsa_aclentp;
-    readacl->acl_entry_size=	sa.vsa_aclentsz;
-	 printk("acl_type before:%i,cnt=%i\n",readacl->acl_type,readacl->acl_cnt);
-        err=acl_translate(readacl,_ACL_ACLENT_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
-        printk("acl_type after:%i,cnt=%i\n",readacl->acl_type,readacl->acl_cnt);
-        printk("translation:%i\n",err);
-     
+    if(err)
+        return err;
+    //Get an acl_t from vsecattr_t
+    err=acl_from_vsecattr(&readacl,&sa);
+    if(err)
+        return err;
+    //Translate the acl_t containing ace_t (NFSv4) into acl_t containing aclent_t (Posix ACL)
+    err=acl_translate(readacl,_ACL_ACLENT_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
+    printk("translation:%i\n",err);
+    if(err)
+        return -err;
+    //Get a Linux-style struct posix_acl from the acl_t containing aclent_t
+    err=posixacl_from_ace(&pacl,readacl,type);
+    if(err)
+        return err;
     acl_free(readacl);
-    return -ENODATA;
+    err=posix_acl_to_xattr(pacl,value,size);
+// posix_acl_release(pacl); // GPL-only !!!!!!!!!!
+    return err;
 }
 
 
@@ -96,7 +162,7 @@ __zpl_xattr_acl_set(struct inode *ip, const char *name,
             ptr++;
         }
 // posix_acl_release(acl); // GPL-only !!!!!!!!!!
-	
+
         printk("acl_type before:%i,cnt=%i\n",newacl->acl_type,newacl->acl_cnt);
         err=acl_translate(newacl,_ACL_ACE_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
         printk("acl_type after:%i,cnt=%i\n",newacl->acl_type,newacl->acl_cnt);

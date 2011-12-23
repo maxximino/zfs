@@ -157,7 +157,7 @@ typedef struct ace_list {
  *	returns (-1 = less than, 0 = equal, 1 = greater than
  */
 void
-ksort(caddr_t v, int n, int s, int (*f)())
+ksort(caddr_t v, int n, int s, int (*f)(void*,void*))
 {
 	int g, i, j, ii;
 	unsigned int *p1, *p2;
@@ -1087,7 +1087,7 @@ ace_list_to_aent(ace_list_t *list, aclent_t **aclentp, int *aclcnt,
 	int error = 0;
 	aclent_t *aent, *result = NULL;
 	acevals_t *vals;
-	int resultcount;
+	int resultcount=0;
 
 	if ((list->seen & (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) !=
 	    (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) {
@@ -1462,8 +1462,8 @@ convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
 {
 	int error = 0;
 	aclent_t *aclentp, *dfaclentp;
-	int aclcnt, dfaclcnt;
-	int aclsz, dfaclsz;
+	int aclcnt=0, dfaclcnt=0;
+	int aclsz=0, dfaclsz=0;
 
 	error = ln_ace_to_aent(acebufp, acecnt, owner, group,
 	    &aclentp, &aclcnt, &dfaclentp, &dfaclcnt, isdir);
@@ -1502,8 +1502,8 @@ int
 acl_translate(acl_t *aclp, int target_flavor, boolean_t isdir, uid_t owner,
     gid_t group)
 {
-	int aclcnt;
-	void *acldata;
+	int aclcnt=0;
+	void *acldata=NULL;
 	int error;
 
 	/*
@@ -1693,7 +1693,7 @@ ace_trivial_common(void *acep, int aclcnt,
 	uint16_t type;
 	uint64_t cookie = 0;
 
-	while (cookie = walk(acep, cookie, aclcnt, &flags, &type, &mask)) {
+	while ((cookie = walk(acep, cookie, aclcnt, &flags, &type, &mask))) {
 		switch (flags & ACE_TYPE_FLAGS) {
 		case ACE_OWNER:
 		case ACE_GROUP|ACE_IDENTIFIER_GROUP:

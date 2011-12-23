@@ -54,7 +54,7 @@ extern acl_t *acl_alloc(acl_type_t);
 extern void acl_free(acl_t *aclp);
 extern int acl_translate(acl_t *aclp, int target_flavor, boolean_t isdir,
     uid_t owner, gid_t group);
-void ksort(caddr_t v, int n, int s, int (*f)());
+void ksort(caddr_t v, int n, int s, int (*f)(void*,void*));
 int cmp2acls(void *a, void *b);
 int acl_trivial_create(mode_t mode, boolean_t isdir, ace_t **acl, int *count);
 void acl_trivial_access_masks(mode_t mode, boolean_t isdir,
