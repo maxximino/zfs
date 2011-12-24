@@ -12,7 +12,64 @@
 #include "sys/zpl.h"
 #include "sys/zpl_posixacl.h"
 #include "acl_common.h"
+#define ACE_POSIX_SUPPORTED_BITS (ACE_READ_DATA | \
+		    ACE_WRITE_DATA | ACE_APPEND_DATA | ACE_EXECUTE | \
+		    ACE_READ_ATTRIBUTES | ACE_READ_ACL | ACE_WRITE_ACL)
 
+#define INVERTIBLE_BITS (ACE_POSIX_SUPPORTED_BITS)
+
+/*
+static void sanitize_nfsv4(acl_t* acl) {
+    ace_t * oldptr=acl->acl_aclp;
+    uint_t oldcount =acl->acl_cnt;
+    ace_t* tmpptr=kmem_alloc(2*oldcount*acl->acl_entry_size,KM_SLEEP);
+    ace_t* laptr; //look ahead ptr
+    uint_t newcount=0;
+    int idx;
+    int create;
+    printk("sanitize!\n");
+    ASSERT(acl->acl_type==ACE_T);
+    acl->acl_aclp=tmpptr;
+    for(idx=0; idx<oldcount; idx++) {
+	create=1;
+    printk("iteration!\n");
+	newcount++;
+        memcpy(tmpptr,oldptr,acl->acl_entry_size);
+	printk("addr=%p,ho=%i,flags=%i,type=%i,accmask=%i",tmpptr,tmpptr->a_who,tmpptr->a_flags,tmpptr->a_type,tmpptr->a_access_mask);
+//clear every non-posix-supported bits
+        tmpptr->a_access_mask = tmpptr->a_access_mask & ACE_POSIX_SUPPORTED_BITS;
+//	if((tmpptr->a_access_mask & ACE_WRITE_DATA) || (tmpptr->a_flags & ACE_OWNER)){
+	if(tmpptr->a_flags & ACE_OWNER){
+	//tmpptr->a_access_mask |= ACE_WRITE_ATTRIBUTES;
+	}
+        if(tmpptr->a_type==ACE_ACCESS_ALLOWED_ACE_TYPE) {
+	   printk("is an allow ace\n");
+            if(idx <(oldcount-1)) {
+		    printk("a following entry exists.\n");
+                laptr=(oldptr+1);
+                printk("oldptr=%p,laptr=%p\n",oldptr,laptr);
+		if((laptr->a_who == tmpptr->a_who) && (laptr->a_flags == tmpptr->a_flags) && (laptr->a_type & ACE_ACCESS_DENIED_ACE_TYPE)) {
+			printk("the following entry is OK.\n");
+                    create=0;
+                }
+            }
+	    //no, does not exists. Create the deny entry.
+	    if(create==1){newcount++;
+	    tmpptr++;
+            memcpy(tmpptr,(tmpptr-1),acl->acl_entry_size);
+	    tmpptr->a_type=ACE_ACCESS_DENIED_ACE_TYPE;
+	    tmpptr->a_access_mask= tmpptr->a_access_mask ^ INVERTIBLE_BITS;
+	    printk("Created correspoding deny entry.\n");
+	printk("addr=%p,ho=%i,flags=%i,type=%i,accmask=%i",tmpptr,tmpptr->a_who,tmpptr->a_flags,tmpptr->a_type,tmpptr->a_access_mask);
+	    }
+        }
+	tmpptr++;
+	oldptr++;
+    }
+    //must free the old memory!! leaking!
+    acl->acl_cnt=newcount;
+}
+*/
 static inline int acl_from_vsecattr(acl_t**newacl, vsecattr_t* sa) {
     acl_t* acl=NULL;
     acl=acl_alloc(ACE_T);
@@ -93,9 +150,12 @@ static int get_aclents_from_inode(acl_t ** newacl, struct inode* ip) {
     if(unlikely(err)) { //idem
         return err;
     }
+    printk("NFSv4 ACL on disk: acl_cnt:%i\n",readacl->acl_cnt);
     //Translate the acl_t containing ace_t (NFSv4) into acl_t containing aclent_t (Posix ACL)
+    //sanitize_nfsv4(readacl); //Temporary disabling this.
+    printk("NFSv4 ACL after sanitize: acl_cnt:%i\n",readacl->acl_cnt);
     err=acl_translate(readacl,_ACL_ACLENT_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
-    printk("translation:%i\n",err);
+    printk("Translation of ACL from disk:%i\n",err);
     if(unlikely(err)) { // + free acl_t
         return -err;
     }
@@ -186,6 +246,7 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
     if(unlikely(!tmp)) {
         return -ENOMEM;
     }
+    printk("MERGING TWO ACLs\n");
     ae = objacl->acl_aclp;
     //Count elements to be allocated for destination ACL
     for(idx=0; idx<objacl->acl_cnt; idx++) {
@@ -193,14 +254,15 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
         ae++;
     }
     ae = defacl->acl_aclp;
-    for(idx=0; idx<objacl->acl_cnt; idx++) {
+    for(idx=0; idx<defacl->acl_cnt; idx++) {
         if(ae->a_type & ACL_DEFAULT) count++;
-            ae++;
-        }
+        ae++;
+    }
     tmp->acl_cnt=count;
     //Allocate array of acl entries
     sz=count * (tmp->acl_entry_size);
     tmp->acl_aclp=kmem_zalloc(sz, KM_SLEEP);
+    printk("Found %i elements to be copied. %i bytes each. %i bytes tot.sizeof %lu\n",count,tmp->acl_entry_size,sz,sizeof(aclent_t));
     if(unlikely(!tmp->acl_aclp)) {
         return -ENOMEM;
     }
@@ -208,17 +270,21 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
     dst_ae=tmp->acl_aclp;
     //Copy elements
     for(idx=0; idx<objacl->acl_cnt; idx++) {
+        printk("Element in objacl. type=%i, id=%i, perm=%i\n",ae->a_type,ae->a_id,ae->a_perm);
         if(!(ae->a_type & ACL_DEFAULT)) {
             memcpy(dst_ae,ae,sizeof(objacl->acl_entry_size));
             dst_ae++;
+            printk("copied.\n");
         }
         ae++;
     }
     ae = defacl->acl_aclp;
-    for(idx=0; idx<objacl->acl_cnt; idx++) {
+    for(idx=0; idx<defacl->acl_cnt; idx++) {
+        printk("Element in defacl. type=%i, id=%i, perm=%i\n",ae->a_type,ae->a_id,ae->a_perm);
         if(ae->a_type & ACL_DEFAULT) {
-            memcpy(dst_ae,ae,sizeof(objacl->acl_entry_size));
+            memcpy(dst_ae,ae,sizeof(defacl->acl_entry_size));
             dst_ae++;
+            printk("copied.\n");
         }
         ae++;
     }
@@ -227,15 +293,16 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
         acl_free(*dest);
     }
     *dest=tmp;
-          return 0;
-             }
-             static int
-             __zpl_xattr_acl_set(struct inode *ip, const char *name,
-const void *value, size_t size, int flags,int type) {
+    return 0;
+}
+static int
+__zpl_xattr_acl_set(struct inode *ip, const char *name,
+                    const void *value, size_t size, int flags,int type) {
     struct posix_acl * acl = NULL;
     acl_t* newacl=NULL;
     acl_t* oldacl=NULL;
     int err = 0;
+    printk("Starting acl_set\n");
     if(unlikely((type != ACL_TYPE_DEFAULT) && (type != ACL_TYPE_ACCESS))) {
         return -EINVAL;
     }
@@ -263,11 +330,6 @@ const void *value, size_t size, int flags,int type) {
         return err;
     }
 // posix_acl_release(acl); // GPL-only !!!!!!!!!!
-    err=acl_translate(newacl,_ACL_ACE_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
-    if(unlikely(err)) {
-        acl_free(newacl);
-        return err;
-    }
     //if it is a directory, it has an ACCESS and a DEFAULT acl. In the posix ACL we have only one of them,but in the acl_t we should put them both.
     //So get the missing part!
     if(S_ISDIR(ip->i_mode)) {
@@ -297,6 +359,13 @@ const void *value, size_t size, int flags,int type) {
         }
         acl_free(oldacl);
     }
+    err=acl_translate(newacl,_ACL_ACE_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
+    if(unlikely(err)) {
+        printk("Translation of new acl failed.\n");
+        acl_free(newacl);
+        return err;
+    }
+    printk("Translation of new acl succeeded.\n");
     err=write_nfsv4_acl(ip,newacl);
     acl_free(newacl);
     if(unlikely(err)) {

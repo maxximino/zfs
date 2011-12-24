@@ -28,6 +28,7 @@
 #include <sys/unistd.h>
 #include <sys/avl.h>
 #if defined(_KERNEL)
+#include <spl-debug.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include "acl_common.h"
@@ -746,9 +747,11 @@ ace_mask_to_mode(uint32_t  mask, o_mode_t *modep, boolean_t isdir)
 	wantbits = (ACE_WRITE_DATA | ACE_APPEND_DATA);
 	if (isdir)
 		wantbits |= ACE_DELETE_CHILD;
+
 	bits = mask & wantbits;
 	if (bits != 0) {
 		if (bits != wantbits) {
+			spl_debug_dumpstack(NULL);printk("Problem in ace mask: bits=%i,wantbits=%i\n",bits,wantbits);
 			error = ENOTSUP;
 			goto out;
 		}
@@ -875,6 +878,7 @@ access_mask_check(ace_t *acep, int mask_bit, int isowner)
 		} else {
 			if ((acep->a_access_mask & mask_bit) &&
 			    (acep->a_type & ACE_ACCESS_ALLOWED_ACE_TYPE)) {
+				spl_debug_dumpstack(NULL);printk("Reason 1\n");
 				return (ENOTSUP);
 			}
 			return (0);
@@ -902,10 +906,12 @@ access_mask_check(ace_t *acep, int mask_bit, int isowner)
 	if (acep->a_type == ACE_ACCESS_DENIED_ACE_TYPE) {
 		if (acl_consume & set_deny) {
 			if (!(acep->a_access_mask & mask_bit)) {
+				spl_debug_dumpstack(NULL);printk("Reason 2: set_deny=%i, mask_bit=%i, a_access_mask=%i\n",set_deny,mask_bit,acep->a_access_mask);
 				return (ENOTSUP);
 			}
 		} else if (acl_consume & err_deny) {
 			if (acep->a_access_mask & mask_bit) {
+				spl_debug_dumpstack(NULL);printk("Reason 3: err_deny=%i, mask_bit=%i, a_access_mask=%i\n",err_deny,mask_bit,acep->a_access_mask);
 				return (ENOTSUP);
 			}
 		}
@@ -913,10 +919,12 @@ access_mask_check(ace_t *acep, int mask_bit, int isowner)
 		/* ACE_ACCESS_ALLOWED_ACE_TYPE */
 		if (acl_consume & set_allow) {
 			if (!(acep->a_access_mask & mask_bit)) {
+				spl_debug_dumpstack(NULL);printk("Reason 4: set_allow:%i, mask_bit=%i, a_access_mask=%i\n",set_allow,mask_bit,acep->a_access_mask);
 				return (ENOTSUP);
 			}
 		} else if (acl_consume & err_allow) {
 			if (acep->a_access_mask & mask_bit) {
+				spl_debug_dumpstack(NULL);printk("Reason 5: err_allow:%i, mask_bit=%i, a_access_mask=%i\n",err_allow,mask_bit,acep->a_access_mask);
 				return (ENOTSUP);
 			}
 		}
@@ -933,6 +941,7 @@ ace_to_aent_legal(ace_t *acep)
 	/* only ALLOW or DENY */
 	if ((acep->a_type != ACE_ACCESS_ALLOWED_ACE_TYPE) &&
 	    (acep->a_type != ACE_ACCESS_DENIED_ACE_TYPE)) {
+				spl_debug_dumpstack(NULL);printk("ACE of not allowed type:%i.\n",acep->a_type);
 		error = ENOTSUP;
 		goto out;
 	}
@@ -947,6 +956,7 @@ ace_to_aent_legal(ace_t *acep)
 	if (acep->a_flags & (ACE_SUCCESSFUL_ACCESS_ACE_FLAG |
 	    ACE_FAILED_ACCESS_ACE_FLAG |
 	    ACE_NO_PROPAGATE_INHERIT_ACE)) {
+				spl_debug_dumpstack(NULL);printk("Illegal flags.\n");
 		error = ENOTSUP;
 		goto out;
 	}
@@ -975,7 +985,7 @@ ace_to_aent_legal(ace_t *acep)
 	if (error)
 		goto out;
 
-	error = access_mask_check(acep, ACE_WRITE_ATTRIBUTES, isowner);
+	//error = access_mask_check(acep, ACE_WRITE_ATTRIBUTES, isowner);
 	if (error)
 		goto out;
 
@@ -990,16 +1000,19 @@ ace_to_aent_legal(ace_t *acep)
 	/* more detailed checking of masks */
 	if (acep->a_type == ACE_ACCESS_ALLOWED_ACE_TYPE) {
 		if (! (acep->a_access_mask & ACE_READ_ATTRIBUTES)) {
+				spl_debug_dumpstack(NULL);printk("ACE is ACCESS_ALLOWED but does not have READ_ATTRIBUTES.\n");
 			error = ENOTSUP;
 			goto out;
 		}
 		if ((acep->a_access_mask & ACE_WRITE_DATA) &&
 		    (! (acep->a_access_mask & ACE_APPEND_DATA))) {
+				spl_debug_dumpstack(NULL);printk("ACE has WRITE_DATA but does not have APPEND_DATA.\n");
 			error = ENOTSUP;
 			goto out;
 		}
 		if ((! (acep->a_access_mask & ACE_WRITE_DATA)) &&
 		    (acep->a_access_mask & ACE_APPEND_DATA)) {
+				spl_debug_dumpstack(NULL);printk("ACE has APPEND_DATA but does not have WRITE_DATA.\n");
 			error = ENOTSUP;
 			goto out;
 		}
@@ -1008,17 +1021,20 @@ ace_to_aent_legal(ace_t *acep)
 	/* ACL enforcement */
 	if ((acep->a_access_mask & ACE_READ_ACL) &&
 	    (acep->a_type != ACE_ACCESS_ALLOWED_ACE_TYPE)) {
+				spl_debug_dumpstack(NULL);printk("ACE has READ_ACL but its type is not ACCESS_ALLOWED.\n");
 		error = ENOTSUP;
 		goto out;
 	}
 	if (acep->a_access_mask & ACE_WRITE_ACL) {
 		if ((acep->a_type == ACE_ACCESS_DENIED_ACE_TYPE) &&
 		    (isowner)) {
+				spl_debug_dumpstack(NULL);printk("ACE denies WRITE_ACL to owner\n");
 			error = ENOTSUP;
 			goto out;
 		}
 		if ((acep->a_type == ACE_ACCESS_ALLOWED_ACE_TYPE) &&
 		    (! isowner)) {
+				spl_debug_dumpstack(NULL);printk("ACE allows WRITE_ACL to not owner\n");
 			error = ENOTSUP;
 			goto out;
 		}
@@ -1034,6 +1050,7 @@ ace_allow_to_mode(uint32_t mask, o_mode_t *modep, boolean_t isdir)
 	/* ACE_READ_ACL and ACE_READ_ATTRIBUTES must both be set */
 	if ((mask & (ACE_READ_ACL | ACE_READ_ATTRIBUTES)) !=
 	    (ACE_READ_ACL | ACE_READ_ATTRIBUTES)) {
+				spl_debug_dumpstack(NULL);printk("READ_ACL and READ_ATTRIBUTES must both be set\n");
 		return (ENOTSUP);
 	}
 
@@ -1050,11 +1067,13 @@ acevals_to_aent(acevals_t *vals, aclent_t *dest, ace_list_t *list,
 	if (isdir)
 		flips |= ACE_DELETE_CHILD;
 	if (vals->allowed != (vals->denied ^ flips)) {
+		spl_debug_dumpstack(NULL);printk("Problem 1 in acevals_to_aent\n,allowed=%i,denied=%i,flips=%i,type=%i\n",vals->allowed,vals->denied,flips,dest->a_type);
 		error = ENOTSUP;
 		goto out;
 	}
 	if ((list->hasmask) && (list->acl_mask != vals->mask) &&
 	    (vals->aent_type & (USER | GROUP | GROUP_OBJ))) {
+			spl_debug_dumpstack(NULL);printk("Problem 2 in acevals_to_aent\n");
 		error = ENOTSUP;
 		goto out;
 	}
@@ -1091,10 +1110,12 @@ ace_list_to_aent(ace_list_t *list, aclent_t **aclentp, int *aclcnt,
 
 	if ((list->seen & (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) !=
 	    (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) {
+			spl_debug_dumpstack(NULL);printk("Problem 1 in ace_list_to_aent\n");
 		error = ENOTSUP;
 		goto out;
 	}
 	if ((! list->hasmask) && (list->numusers + list->numgroups > 0)) {
+			spl_debug_dumpstack(NULL);printk("Problem 2 in ace_list_to_aent\n");
 		error = ENOTSUP;
 		goto out;
 	}
@@ -1278,6 +1299,7 @@ ln_ace_to_aent(ace_t *ace, int n, uid_t owner, gid_t group,
 
 	/* we need at least user_obj, group_obj, and other_obj */
 	if (n < 6) {
+		spl_debug_dumpstack(NULL);printk("n less than 3 \n");
 		error = ENOTSUP;
 		goto out;
 	}
@@ -1334,6 +1356,7 @@ ln_ace_to_aent(ace_t *ace, int n, uid_t owner, gid_t group,
 			if (bits != (ACE_INHERIT_ONLY_ACE |
 			    ACE_FILE_INHERIT_ACE |
 			    ACE_DIRECTORY_INHERIT_ACE)) {
+		spl_debug_dumpstack(NULL);printk("inherit flags fdi: all or nothing\n");
 				error = ENOTSUP;
 				goto out;
 			}
@@ -1344,6 +1367,7 @@ ln_ace_to_aent(ace_t *ace, int n, uid_t owner, gid_t group,
 
 		if ((acep->a_flags & ACE_OWNER)) {
 			if (acl->state > ace_user_obj) {
+		spl_debug_dumpstack(NULL);printk("ACE_OWNER and state > ace_user_obj \n");
 				error = ENOTSUP;
 				goto out;
 			}
@@ -1358,6 +1382,7 @@ ln_ace_to_aent(ace_t *ace, int n, uid_t owner, gid_t group,
 			vals->aent_type = OTHER_OBJ | acl->dfacl_flag;
 		} else if (acep->a_flags & ACE_IDENTIFIER_GROUP) {
 			if (acl->state > ace_group) {
+			spl_debug_dumpstack(NULL);printk("Problem in ace mask\n");
 				error = ENOTSUP;
 				goto out;
 			}
