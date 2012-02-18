@@ -89,20 +89,21 @@ static int posixacl_from_ace(struct posix_acl** newacl,acl_t* acl,int posixacl_t
     aclent_t* ae;
     int idx=0,count=0;
     ae = acl->acl_aclp;
-    //Count the elements we're interested in. (access OR default)
+    //Count the elements we're interested in. access OR default)
     if(posixacl_type==ACL_TYPE_DEFAULT) {
         for(idx=0; idx<acl->acl_cnt; idx++) {
-            if(ae->a_type & ACL_DEFAULT) count++;
+            if((ae->a_type & ACL_DEFAULT)==ACL_DEFAULT) count++;
             ae++;
         }
     }
     else {
         for(idx=0; idx<acl->acl_cnt; idx++) {
-            if(!(ae->a_type & ACL_DEFAULT)) count++;
+            if((ae->a_type & ACL_DEFAULT)==0) { printk("\n%x - id %i - perm %i CONTATO PER ACCESS ",ae->a_type,ae->a_id,ae->a_perm); count++; }
             ae++;
         }
     }
     //Allocate the Posix ACL
+    printk(" alloco %i mentre prima erano %i \n",count,acl->acl_cnt);
     pacl=posix_acl_alloc(count,GFP_NOFS);
     if(unlikely(pacl==NULL)) {
         return -ENOMEM;
@@ -113,10 +114,10 @@ static int posixacl_from_ace(struct posix_acl** newacl,acl_t* acl,int posixacl_t
     for(idx=0; idx<acl->acl_cnt; idx++) {
         //if we are interested in this element
         if(posixacl_type==ACL_TYPE_DEFAULT) {
-            if(!(ae->a_type & ACL_DEFAULT)) continue;
+            if(!(ae->a_type & ACL_DEFAULT)) { ae++; continue;}
         }
         else {
-            if(ae->a_type & ACL_DEFAULT) continue;
+            if(ae->a_type & ACL_DEFAULT) {ae++;continue;}
         }
         //copy informations from one structure to the other.
         pae->e_id = ae->a_id;
@@ -212,7 +213,8 @@ static int aclent_from_posixacl(acl_t ** newacl,struct posix_acl* pacl,int type)
         ptr->a_type=flgs|pa->e_tag; //Constants in Linux and Solaris for type field have different names but same numerical value. Not a clean way to deal with this, but for first tests it does its job quite well. TODO: Cleanup this.
         ptr->a_id=pa->e_id;
         ptr->a_perm=pa->e_perm;
-        ptr++;
+        printk("from linux posix to solaris posixacl: type %x id %i perm %i\n",pa->e_tag,pa->e_id,pa->e_perm);
+	ptr++;
     }
     //Set the destination variable to the right pointer.
     *newacl=acl;
@@ -270,9 +272,9 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
     dst_ae=tmp->acl_aclp;
     //Copy elements
     for(idx=0; idx<objacl->acl_cnt; idx++) {
-        printk("Element in objacl. type=%i, id=%i, perm=%i\n",ae->a_type,ae->a_id,ae->a_perm);
+        printk("Element in objacl. type=%i, id=%i, perm=%i ae=%p dst_ae=%p\n",ae->a_type,ae->a_id,ae->a_perm,ae,dst_ae);
         if(!(ae->a_type & ACL_DEFAULT)) {
-            memcpy(dst_ae,ae,sizeof(objacl->acl_entry_size));
+            memcpy(dst_ae,ae,objacl->acl_entry_size);
             dst_ae++;
             printk("copied.\n");
         }
@@ -282,7 +284,7 @@ static int merge_acls(acl_t ** dest, acl_t* objacl, acl_t *defacl) {
     for(idx=0; idx<defacl->acl_cnt; idx++) {
         printk("Element in defacl. type=%i, id=%i, perm=%i\n",ae->a_type,ae->a_id,ae->a_perm);
         if(ae->a_type & ACL_DEFAULT) {
-            memcpy(dst_ae,ae,sizeof(defacl->acl_entry_size));
+            memcpy(dst_ae,ae,defacl->acl_entry_size);
             dst_ae++;
             printk("copied.\n");
         }
@@ -348,7 +350,7 @@ __zpl_xattr_acl_set(struct inode *ip, const char *name,
                 return err;
             }
         }
-        else {
+        else if(type==ACL_TYPE_ACCESS){
             // this is an access acl, take the access entries from the new and the default entries from the old.
             err=merge_acls(&newacl,newacl,oldacl);
             if(unlikely(err)) {
@@ -357,11 +359,14 @@ __zpl_xattr_acl_set(struct inode *ip, const char *name,
                 return err;
             }
         }
+else{
+printk("What the fuck?"); return -1;
+}
         acl_free(oldacl);
     }
     err=acl_translate(newacl,_ACL_ACE_ENABLED,S_ISDIR(ip->i_mode),ip->i_uid,ip->i_gid);
     if(unlikely(err)) {
-        printk("Translation of new acl failed.\n");
+        printk("Translation of new acl failed.%i\n",err);
         acl_free(newacl);
         return err;
     }

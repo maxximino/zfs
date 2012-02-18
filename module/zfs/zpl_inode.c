@@ -27,6 +27,7 @@
 #include <sys/zfs_vnops.h>
 #include <sys/vfs.h>
 #include <sys/zpl.h>
+#include <sys/acl.h>
 
 
 static struct dentry *
@@ -351,6 +352,26 @@ zpl_fallocate(struct inode *ip, int mode, loff_t offset, loff_t len)
 #endif /* HAVE_INODE_FALLOCATE */
 
 
+static int zpl_permission(struct inode* ino, int mask){
+	int error = 0;
+	cred_t *cr = CRED();
+	if(mask & MAY_READ){
+		error=-zfs_access(ino,ACE_READ_DATA,V_ACE_MASK,cr);
+	}
+	if(mask & MAY_WRITE){
+		error=-zfs_access(ino,ACE_WRITE_DATA,V_ACE_MASK,cr);
+	}
+	if(mask & MAY_EXEC){
+		error=-zfs_access(ino,ACE_EXECUTE,V_ACE_MASK,cr);
+	}
+	crhold(cr);
+	crfree(cr);
+	if(error == 0){
+	error=generic_permission(ino,mask);
+	}
+	return (error);
+}
+
 const struct inode_operations zpl_inode_operations = {
 	.create		= zpl_create,
 	.link		= zpl_link,
@@ -388,6 +409,7 @@ const struct inode_operations zpl_dir_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+	.permission	= zpl_permission,
 };
 
 const struct inode_operations zpl_symlink_inode_operations = {
@@ -400,6 +422,7 @@ const struct inode_operations zpl_symlink_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+	.permission	= zpl_permission,
 };
 
 const struct inode_operations zpl_special_inode_operations = {
@@ -409,4 +432,5 @@ const struct inode_operations zpl_special_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+	.permission	= zpl_permission,
 };

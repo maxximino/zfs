@@ -32,6 +32,7 @@
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include "acl_common.h"
+#include <acl_translator.h>
 #else
 #include <errno.h>
 #include <stdlib.h>
@@ -479,7 +480,7 @@ ln_aent_preprocess(aclent_t *aclent, int n,
 			(*numgroup)++;
 		if (aclent[i].a_type & CLASS_OBJ) {
 			if (*hasmask) {
-				error = EINVAL;
+				error = EINVAL; printk("EINVAL hasmask\n");
 				goto out;
 			} else {
 				*hasmask = 1;
@@ -489,7 +490,7 @@ ln_aent_preprocess(aclent_t *aclent, int n,
 	}
 
 	if ((! *hasmask) && (*numuser + *numgroup > 1)) {
-		error = EINVAL;
+		error = EINVAL; printk("EINVAL e num aclent_t non congruente");
 		goto out;
 	}
 
@@ -651,6 +652,7 @@ ln_aent_to_ace(aclent_t *aclent, int n, ace_t **acepp, int *rescount, int isdir)
 			acep += 2;
 		} else {
 			error = EINVAL;
+			printk("EINVAL ad aclent[i].a_type=%x\n",aclent[i].a_type);
 			goto out;
 		}
 	}
@@ -695,7 +697,7 @@ convert_aent_to_ace(aclent_t *aclentp, int aclcnt, boolean_t isdir,
 		dfaclcnt = aclcnt - i;
 	}
 
-	if (dfaclcnt && !isdir) {
+	if (dfaclcnt && !isdir) { printk("default ma non dir. EINVAL!\n");
 		return (EINVAL);
 	}
 
@@ -1553,9 +1555,11 @@ acl_translate(acl_t *aclp, int target_flavor, boolean_t isdir, uid_t owner,
 
 	} else if (target_flavor == _ACL_ACLENT_ENABLED &&
 	    aclp->acl_type == ACE_T) {
-		error = convert_ace_to_aent(aclp->acl_aclp, aclp->acl_cnt,
+		error = permissive_convert_ace_to_aent(aclp->acl_aclp, aclp->acl_cnt,
 		    isdir, owner, group, (aclent_t **)&acldata, &aclcnt);
-		if (error)
+	if(0){	error = convert_ace_to_aent(aclp->acl_aclp, aclp->acl_cnt,
+		    isdir, owner, group, (aclent_t **)&acldata, &aclcnt);}
+	if (error)
 			goto out;
 	} else {
 		error = ENOTSUP;
