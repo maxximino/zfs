@@ -114,7 +114,8 @@
     ACE_IDENTIFIER_GROUP | ACE_OWNER | ACE_GROUP | ACE_EVERYONE)
 
 #define START_TMPSIZE 100
-#define DEFAULT_INHERIT_NEEDED_FLAGS ACE_INHERIT_ONLY_ACE
+#define DEFAULT_INHERIT_NEEDED_FLAGS (ACE_FILE_INHERIT_ACE|ACE_DIRECTORY_INHERIT_ACE|ACE_INHERIT_ONLY_ACE)
+#define ALSO_INHERIT_NEEDED_FLAGS (ACE_FILE_INHERIT_ACE|ACE_DIRECTORY_INHERIT_ACE)
 /*
 * actually doesn't consider ACLs without ACE_INHERIT_ONLY_ACE as inheritable. PosixACL to NFSv4 writes default ACLS with this flag,
 * so this is a problem only for externally written NFSv4 ACLs
@@ -134,9 +135,9 @@
 #define compare_allof(x,y) ((x & y) == y)
 
 typedef struct paclint {
-aclent_t aclent;
-int firstdeny;
-int acceptedmask;
+    aclent_t aclent;
+    int initialized;
+    int decidedmask;
 } paclint_t;
 
 static int lookup_aclent(int posixtype,uid_t who, paclint_t** array, unsigned int*size,unsigned int*usedsize) {
@@ -202,6 +203,7 @@ void copytype(int posixtype,paclint_t* from,unsigned int size,aclent_t* to,unsig
     }
 
 }
+#define RECOGNIZED_AS_MASK 0x8000 //unused flag in a_flags. Ideal would be tracking this outside that structure.
 int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
                                    uid_t owner, gid_t group, aclent_t **retaclentp, int *retaclcnt) {
     unsigned int tmpsize = START_TMPSIZE;
@@ -210,6 +212,13 @@ int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
     int i=0,posixtype,removedperms,addedperms,idx;
     aclent_t* ret;
     paclint_t* tmp = (paclint_t*)kzalloc(sizeof(paclint_t)*tmpsize,GFP_NOFS); //ci conto che sia zero-filled!!
+    int mask_normal=-1;
+    int mask_default=-1;
+    short first_normal=1;
+    short first_default=1;
+    int *maskptr;
+    short *firstptr;
+    int tmp_mask;
     ace_t* cur_ace;
     tmp[0].aclent.a_type=USER_OBJ;
     tmp[1].aclent.a_type=GROUP_OBJ;
@@ -217,59 +226,133 @@ int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
     tmp[3].aclent.a_type=OTHER_OBJ;
     tmp[2].aclent.a_perm=7;
     printk("Permissive ACE to AENT: %i ACEs\n",acecnt);
-    for(i =0; i<acecnt; i++) {
+    //ricerca mask
+    for(i=0; i<acecnt; i++) {
         cur_ace=&acebufp[i];
-        if(cur_ace->a_type != ACE_ACCESS_ALLOWED_ACE_TYPE) {
-            continue;
-        }
-        printk("ACE allow");
         posixtype = get_posixtype(cur_ace);
-        printk("cerco %i\n",posixtype);
-	if(posixtype & ACL_DEFAULT) has_default=1;
+start_mask_iteration:
         idx = lookup_aclent(posixtype,cur_ace->a_who,&tmp,&tmpsize,&usedsize);
-        addedperms=0;
-        if(compare_allof(cur_ace->a_access_mask,READ_ENABLE_FLAGS)) {
-            addedperms |= 4;
+        if(tmp[idx].initialized == 1) continue; //interested only in the first of each user/group/etc
+        tmp[idx].initialized=1;
+        if((posixtype & (USER_OBJ|OTHER_OBJ))>0) {
+            continue; //maschera non importa per USER_OBJ e OTHER_OBJ
         }
-        if(compare_allof(cur_ace->a_access_mask,WRITE_ENABLE_FLAGS)) {
-            addedperms |=2 ;
+        if(posixtype & ACL_DEFAULT) {
+            has_default=1;
+            maskptr=&mask_default;
+            firstptr=&first_default;
         }
-        if(compare_allof(cur_ace->a_access_mask,EXEC_ENABLE_FLAGS)) {
-            addedperms |= 1;
+        else {
+            maskptr=&mask_normal;
+            firstptr=&first_normal;
         }
-	
-        printk(" Nidx=%i Pidx=%i addedperms=%x amask=%x who=%i posixtype=%x flags=%x\n",i,idx,addedperms,cur_ace->a_access_mask,cur_ace->a_who,posixtype,cur_ace->a_flags);
-        tmp[idx].aclent.a_perm |=addedperms;
-        tmp[idx].aclent.a_id=cur_ace->a_who;
+        if(cur_ace->a_type == ACE_ACCESS_DENIED_ACE_TYPE) {
+            //candidato ad essere la maschera
+            tmp_mask=0;
+            if(compare_anyof(cur_ace->a_access_mask,READ_DISABLE_FLAGS)) {
+                tmp_mask |= 4;
+            }
+            if(compare_anyof(cur_ace->a_access_mask,WRITE_DISABLE_FLAGS)) {
+                tmp_mask |=2 ;
+            }
+            if(compare_anyof(cur_ace->a_access_mask,EXEC_DISABLE_FLAGS)) {
+                tmp_mask |= 1;
+            }
+
+            if(*firstptr==1) {
+                *firstptr=0;
+                *maskptr=tmp_mask;
+            }
+            else if(*maskptr!=tmp_mask) {
+                *maskptr=-1; //non c'è una maschera valida. Rinuncio PER QUESTO TIPO
+            }
+            cur_ace->a_flags |= RECOGNIZED_AS_MASK;
+
+        }
+        else { //non inizializzato e il primo non è un deny. quindi
+            //Non c'è una maschera valida. Rinuncio PER QUESTO TIPO
+            *maskptr=-1;
+        }
+        if(compare_allof(cur_ace->a_flags,ALSO_INHERIT_NEEDED_FLAGS) && !(posixtype & ACL_DEFAULT)) {
+            posixtype |= ACL_DEFAULT;
+            printk("MASKREPEAT x flags FD\n");
+            goto start_mask_iteration;
+        }
+
     }
+    idx=lookup_aclent(CLASS_OBJ,0,&tmp,&tmpsize,&usedsize);
+    if(mask_normal==-1) {
+        tmp[idx].aclent.a_perm= 7 ;
+    }
+    else {
+        tmp[idx].aclent.a_perm= (7 & ~mask_normal);
+    }
+    if(has_default) {
+        idx=lookup_aclent(ACL_DEFAULT|CLASS_OBJ,0,&tmp,&tmpsize,&usedsize);
+        if(mask_default==-1) {
+            tmp[idx].aclent.a_perm= 7;
+        }
+        else {
+            tmp[idx].aclent.a_perm= (7 & ~mask_default);
+        }
+
+    }
+
     for(i =0; i<acecnt; i++) {
         cur_ace=&acebufp[i];
-        if(cur_ace->a_type != ACE_ACCESS_DENIED_ACE_TYPE) {
-            continue;
-        }
-        printk("ACE deny");
-        posixtype = get_posixtype(cur_ace);;
-	if(posixtype & ACL_DEFAULT) has_default=1;
+        posixtype = get_posixtype(cur_ace);
+start_calc_iteration:
+        printk("cerco %i\n",posixtype);
         idx = lookup_aclent(posixtype,cur_ace->a_who,&tmp,&tmpsize,&usedsize);
-        removedperms=0;
-        if(compare_anyof(cur_ace->a_access_mask,READ_DISABLE_FLAGS)) {
-            removedperms |= 4;
+        if(cur_ace->a_type == ACE_ACCESS_ALLOWED_ACE_TYPE) {
+            printk("ACE allow");
+            addedperms=0;
+            if(compare_allof(cur_ace->a_access_mask,READ_ENABLE_FLAGS) && !(tmp[idx].decidedmask & 4) ) {
+                addedperms |= 4;
+            }
+            if(compare_allof(cur_ace->a_access_mask,WRITE_ENABLE_FLAGS) && !(tmp[idx].decidedmask & 2)) {
+                addedperms |=2 ;
+            }
+            if(compare_allof(cur_ace->a_access_mask,EXEC_ENABLE_FLAGS) && !(tmp[idx].decidedmask & 1)) {
+                addedperms |= 1;
+            }
+
+            printk(" Nidx=%i Pidx=%i addedperms=%x amask=%x who=%i posixtype=%x flags=%x\n",i,idx,addedperms,cur_ace->a_access_mask,cur_ace->a_who,posixtype,cur_ace->a_flags);
+            tmp[idx].aclent.a_perm |=addedperms;
+            tmp[idx].decidedmask |= addedperms;
         }
-        if(compare_anyof(cur_ace->a_access_mask,WRITE_DISABLE_FLAGS)) {
-            removedperms |=2 ;
+        else if(cur_ace->a_type == ACE_ACCESS_DENIED_ACE_TYPE) {
+            if((posixtype & ACL_DEFAULT) && (mask_default!=-1) && (cur_ace->a_flags & RECOGNIZED_AS_MASK)) {
+                printk("Found ACE deny from the mask (default). Skipping\n");
+                continue;
+            }
+            if(((posixtype & ACL_DEFAULT)==0) && (mask_normal!=-1) && (cur_ace->a_flags & RECOGNIZED_AS_MASK)) {
+                printk("Found ACE deny from the mask. Skipping\n");
+                continue;
+            }
+            printk("ACE deny");
+            removedperms=0;
+            if(compare_anyof(cur_ace->a_access_mask,READ_DISABLE_FLAGS) && !(tmp[idx].decidedmask & 4) ) {
+                removedperms |= 4;
+            }
+            if(compare_anyof(cur_ace->a_access_mask,WRITE_DISABLE_FLAGS) && !(tmp[idx].decidedmask & 2) ) {
+                removedperms |=2 ;
+            }
+            if(compare_anyof(cur_ace->a_access_mask,EXEC_DISABLE_FLAGS) && !(tmp[idx].decidedmask & 1) ) {
+                removedperms |= 1;
+            }
+            printk("Nidx=%i Pidx=%i removedperms=%x amask=%x who=%i posixtype=%x flags=%x\n",i,idx,removedperms,cur_ace->a_access_mask,cur_ace->a_who,posixtype,cur_ace->a_flags);
+            tmp[idx].aclent.a_perm &= ~removedperms;
+            tmp[idx].decidedmask |= removedperms;
+
         }
-        if(compare_anyof(cur_ace->a_access_mask,EXEC_DISABLE_FLAGS)) {
-            removedperms |= 1;
+        if(compare_allof(cur_ace->a_flags,ALSO_INHERIT_NEEDED_FLAGS) && !(posixtype & ACL_DEFAULT)) {
+            posixtype |= ACL_DEFAULT;
+            printk("REPEAT x flags FD\n");
+            goto start_calc_iteration;
         }
-        printk("Nidx=%i Pidx=%i removedperms=%x amask=%x who=%i posixtype=%x flags=%x\n",i,idx,removedperms,cur_ace->a_access_mask,cur_ace->a_who,posixtype,cur_ace->a_flags);
-        tmp[idx].aclent.a_perm &= ~removedperms;
     }
-    //MASCHERA NON ANCORA CONSIDERATA
-    //HACK PER MASCHERA DEFAULT
-    if(has_default){
-    idx=lookup_aclent(ACL_DEFAULT|CLASS_OBJ,0,&tmp,&tmpsize,&usedsize);
-    tmp[idx].aclent.a_perm=7;
-    }
+
     printk("1'fase ok. %i elementi\n",usedsize);
     ret = (aclent_t*)kzalloc(sizeof(aclent_t)*usedsize,GFP_NOFS);
     cpidx = 0;
