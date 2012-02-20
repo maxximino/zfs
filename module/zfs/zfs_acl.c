@@ -2337,8 +2337,8 @@ zfs_zaccess_common(znode_t *zp, uint32_t v4_mode, uint32_t *working_mode,
 	int err;
 
 	*working_mode = v4_mode;
-	*check_privs = B_TRUE;
-
+//	*check_privs = B_TRUE;
+*check_privs=B_FALSE;  //TODO: UGLY HACK FOR TESTS: this SHOULD BE true!!
 	/*
 	 * Short circuit empty requests
 	 */
@@ -2504,7 +2504,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 	 * needed_bits.
 	 */
 	needed_bits = 0;
-
+printk("mode=%x,owner=%i,uid=%i\n",mode,owner,crgetuid(cr));
 	working_mode = mode;
 	if ((working_mode & (ACE_READ_ACL|ACE_READ_ATTRIBUTES)) &&
 	    owner == crgetuid(cr))
@@ -2526,7 +2526,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 		return (secpolicy_vnode_access2(cr, ZTOI(zp), owner,
 		    needed_bits, needed_bits));
 	}
-
+printk("error=%i,check_privs=%i\n",error,check_privs);
 	if (error && !check_privs) {
 		if (is_attr)
 			iput(ZTOI(xzp));

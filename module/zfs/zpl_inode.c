@@ -355,20 +355,25 @@ zpl_fallocate(struct inode *ip, int mode, loff_t offset, loff_t len)
 static int zpl_permission(struct inode* ino, int mask){
 	int error = 0;
 	cred_t *cr = CRED();
+	crhold(cr);
 	if(mask & MAY_READ){
 		error=-zfs_access(ino,ACE_READ_DATA,V_ACE_MASK,cr);
+		printk("MAY_READ,%i",error);
+		if(error) goto end;
 	}
 	if(mask & MAY_WRITE){
 		error=-zfs_access(ino,ACE_WRITE_DATA,V_ACE_MASK,cr);
+		printk("MAY_WRITE,%i",error);
+		if(error) goto end;
 	}
 	if(mask & MAY_EXEC){
 		error=-zfs_access(ino,ACE_EXECUTE,V_ACE_MASK,cr);
+		printk("MAY_EXEC,%i",error);
+		if(error) goto end;
 	}
-	crhold(cr);
+	end:
+	printk("mask=%i,error=%i\n",mask,error);
 	crfree(cr);
-	if(error == 0){
-	error=generic_permission(ino,mask);
-	}
 	return (error);
 }
 
@@ -388,6 +393,7 @@ const struct inode_operations zpl_inode_operations = {
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
 	.truncate_range = zpl_truncate_range,
+	.permission	= zpl_permission,
 #ifdef HAVE_INODE_FALLOCATE
 	.fallocate	= zpl_fallocate,
 #endif /* HAVE_INODE_FALLOCATE */

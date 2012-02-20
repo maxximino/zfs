@@ -32,7 +32,7 @@
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include "acl_common.h"
-#include <acl_translator.h>
+#include "acl_translator.h"
 #else
 #include <errno.h>
 #include <stdlib.h>
