@@ -45,6 +45,7 @@
 #define	ASSERT	assert
 #endif
 
+//--------- copy/paste from other header file for convenience, to be removed in final version! --------
 #define	ACE_POSIX_SUPPORTED_BITS (ACE_READ_DATA | \
     ACE_WRITE_DATA | ACE_APPEND_DATA | ACE_EXECUTE | \
     ACE_READ_ATTRIBUTES | ACE_READ_ACL | ACE_WRITE_ACL)
@@ -113,13 +114,19 @@
     ACE_SUCCESSFUL_ACCESS_ACE_FLAG | ACE_FAILED_ACCESS_ACE_FLAG | \
     ACE_IDENTIFIER_GROUP | ACE_OWNER | ACE_GROUP | ACE_EVERYONE)
 
+
+//----------- end copy/pase ---------
+
+
+
+
+
+
+
+//--------- Tweaking section -------
 #define START_TMPSIZE 100
 #define DEFAULT_INHERIT_NEEDED_FLAGS (ACE_FILE_INHERIT_ACE|ACE_DIRECTORY_INHERIT_ACE|ACE_INHERIT_ONLY_ACE)
 #define ALSO_INHERIT_NEEDED_FLAGS (ACE_FILE_INHERIT_ACE|ACE_DIRECTORY_INHERIT_ACE)
-/*
-* actually doesn't consider ACLs without ACE_INHERIT_ONLY_ACE as inheritable. PosixACL to NFSv4 writes default ACLS with this flag,
-* so this is a problem only for externally written NFSv4 ACLs
-*/
 #define DEFAULT_INHERIT_ANYOF_FLAGS ( ACE_FILE_INHERIT_ACE | ACE_DIRECTORY_INHERIT_ACE | ACE_NO_PROPAGATE_INHERIT_ACE | ACE_INHERIT_ONLY_ACE )
 
 #define READ_ENABLE_FLAGS ACE_READ_DATA
@@ -130,6 +137,10 @@
 //#define WRITE_DISABLE_FLAGS ( ACE_WRITE_DATA | ACE_ADD_FILE | ACE_APPEND_DATA | ACE_ADD_SUBDIRECTORY | ACE_WRITE_NAMED_ATTRS | ACE_WRITE_ATTRIBUTES )
 #define WRITE_DISABLE_FLAGS ( ACE_WRITE_DATA | ACE_ADD_FILE | ACE_APPEND_DATA | ACE_ADD_SUBDIRECTORY | ACE_WRITE_NAMED_ATTRS )
 #define EXEC_DISABLE_FLAGS ACE_EXECUTE
+
+
+//--------- End tweaking section ---------
+
 
 #define compare_anyof(x,y) ((x & y) > 0)
 #define compare_allof(x,y) ((x & y) == y)
@@ -144,28 +155,28 @@ static int lookup_aclent(int posixtype,uid_t who, paclint_t** array, unsigned in
     int i = 0;
     for(i = 0; i<(*size); i++) {
         if((*array)[i].aclent.a_type==0) {
-            break;   //non inizializzato
+            break;   //Not initialized
         }
         if((*array)[i].aclent.a_type==posixtype) {
             if((posixtype==USER || posixtype==GROUP || posixtype==(ACL_DEFAULT|USER) ||posixtype==(ACL_DEFAULT|GROUP)) && ((*array)[i].aclent.a_id!=who) ) {
                 continue;
             }
             else {
-                return i; //trovato!!
+                return i; //Found existing entry!
             }
         }
     }
-//creiamone uno nuovo.....
+//Initialize a new entry
     if(i < *size) {
-//ho posto....
+//There is enough space.
         (*array)[i].aclent.a_type=posixtype;
         (*array)[i].aclent.a_id=who;
         (*usedsize)++;
         return i;
     }
     else {
-//riallochiamo l'array :(
-        printk("More than 100 elements in posix ACL not yet handled. Write the code!!! Continuing with WRONG results");
+//We should reallocate the array :(
+        printk("More than %i elements in posix ACL not yet handled. I still have to write the code!!! Continuing with WRONG results",START_TMPSIZE); //TODO
         return (*size)-1;
     }
 }
@@ -190,7 +201,7 @@ static int get_posixtype(ace_t* cur_ace) {
     if(((cur_ace->a_flags & DEFAULT_INHERIT_NEEDED_FLAGS)==DEFAULT_INHERIT_NEEDED_FLAGS) && (cur_ace->a_flags & DEFAULT_INHERIT_ANYOF_FLAGS)) {
         posixtype |= ACL_DEFAULT;
     }
-    printk("get_posixtype: %x diventa %x\n",cur_ace->a_flags,posixtype);
+    printk("get_posixtype: %x becomes %x\n",cur_ace->a_flags,posixtype);
     return posixtype;
 }
 void copytype(int posixtype,paclint_t* from,unsigned int size,aclent_t* to,unsigned int*idx) {
@@ -211,7 +222,7 @@ int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
     int has_default = 0;
     int i=0,posixtype,removedperms,addedperms,idx;
     aclent_t* ret;
-    paclint_t* tmp = (paclint_t*)kzalloc(sizeof(paclint_t)*tmpsize,GFP_NOFS); //ci conto che sia zero-filled!!
+    paclint_t* tmp = (paclint_t*)kzalloc(sizeof(paclint_t)*tmpsize,GFP_NOFS); //It's MANDATORY that the memory is zero-filled!!
     int mask_normal=-1;
     int mask_default=-1;
     short first_normal=1;
@@ -235,7 +246,7 @@ start_mask_iteration:
         if(tmp[idx].initialized == 1) continue; //interested only in the first of each user/group/etc
         tmp[idx].initialized=1;
         if((posixtype & (USER_OBJ|OTHER_OBJ))>0) {
-            continue; //maschera non importa per USER_OBJ e OTHER_OBJ
+		continue; //mask doesn't matter for USER_OBJ e OTHER_OBJ
         }
         if(posixtype & ACL_DEFAULT) {
             has_default=1;
@@ -247,7 +258,7 @@ start_mask_iteration:
             firstptr=&first_normal;
         }
         if(cur_ace->a_type == ACE_ACCESS_DENIED_ACE_TYPE) {
-            //candidato ad essere la maschera
+            //Candidate to become the mask
             tmp_mask=0;
             if(compare_anyof(cur_ace->a_access_mask,READ_DISABLE_FLAGS)) {
                 tmp_mask |= 4;
@@ -264,18 +275,17 @@ start_mask_iteration:
                 *maskptr=tmp_mask;
             }
             else if(*maskptr!=tmp_mask) {
-                *maskptr=-1; //non c'è una maschera valida. Rinuncio PER QUESTO TIPO
+                *maskptr=-1; //There is not a valid mask. Givin' up for this type. (access/default)
             }
             cur_ace->a_flags |= RECOGNIZED_AS_MASK;
 
         }
-        else { //non inizializzato e il primo non è un deny. quindi
-            //Non c'è una maschera valida. Rinuncio PER QUESTO TIPO
+	else { //Not initialized and the first one is not a DENY entry. So
+            //there is not a valid mask for this type of ACL.
             *maskptr=-1;
         }
         if(compare_allof(cur_ace->a_flags,ALSO_INHERIT_NEEDED_FLAGS) && !(posixtype & ACL_DEFAULT)) {
             posixtype |= ACL_DEFAULT;
-            printk("MASKREPEAT x flags FD\n");
             goto start_mask_iteration;
         }
 
@@ -302,7 +312,7 @@ start_mask_iteration:
         cur_ace=&acebufp[i];
         posixtype = get_posixtype(cur_ace);
 start_calc_iteration:
-        printk("cerco %i\n",posixtype);
+        printk("Looking for posixtype=%i\n",posixtype);
         idx = lookup_aclent(posixtype,cur_ace->a_who,&tmp,&tmpsize,&usedsize);
         if(cur_ace->a_type == ACE_ACCESS_ALLOWED_ACE_TYPE) {
             printk("ACE allow");
@@ -353,7 +363,7 @@ start_calc_iteration:
         }
     }
 
-    printk("1'fase ok. %i elementi\n",usedsize);
+    printk("1st phase ok. %i elements\n",usedsize);
     ret = (aclent_t*)kzalloc(sizeof(aclent_t)*usedsize,GFP_NOFS);
     cpidx = 0;
     copytype(USER_OBJ,tmp,usedsize,ret,&cpidx);
