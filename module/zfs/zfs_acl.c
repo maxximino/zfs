@@ -2305,7 +2305,8 @@ zfs_zaccess_aces_check(znode_t *zp, uint32_t *working_mode,
 		*working_mode |= deny_mask;
 		return (EACCES);
 	} else if (*working_mode) {
-		return (-1);
+		// return (-1); why EPERM with inverted sign? Leads to NULL pointer dereference in do_sys_open as it is not understood as an error value.
+		return EACCES;
 	}
 
 	return (0);
