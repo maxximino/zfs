@@ -488,7 +488,6 @@ zfs_fuid_node_add(zfs_fuid_info_t **fuidpp, const char *domain, uint32_t rid,
 	}
 }
 
-#ifdef HAVE_KSID
 /*
  * Create a file system FUID, based on information in the users cred
  *
@@ -501,24 +500,31 @@ uint64_t
 zfs_fuid_create_cred(zfs_sb_t *zsb, zfs_fuid_type_t type,
     cred_t *cr, zfs_fuid_info_t **fuidp)
 {
+#ifdef HAVE_KSID
 	uint64_t	idx;
 	ksid_t		*ksid;
 	uint32_t	rid;
 	char		*kdomain;
 	const char	*domain;
+#endif /* HAVE_KSID */
 	uid_t		id;
 
 	VERIFY(type == ZFS_OWNER || type == ZFS_GROUP);
 
+#ifdef HAVE_KSID
 	ksid = crgetsid(cr, (type == ZFS_OWNER) ? KSID_OWNER : KSID_GROUP);
 
 	if (!zsb->z_use_fuids || (ksid == NULL)) {
+#endif /* HAVE_KSID */
 		id = (type == ZFS_OWNER) ? crgetuid(cr) : crgetgid(cr);
 
+#ifdef HAVE_KSID
 		if (IS_EPHEMERAL(id))
 			return ((type == ZFS_OWNER) ? UID_NOBODY : GID_NOBODY);
+#endif /* HAVE_KSID */
 
 		return ((uint64_t)id);
+#ifdef HAVE_KSID
 	}
 
 	/*
@@ -540,8 +546,8 @@ zfs_fuid_create_cred(zfs_sb_t *zsb, zfs_fuid_type_t type,
 	zfs_fuid_node_add(fuidp, kdomain, rid, idx, id, type);
 
 	return (FUID_ENCODE(idx, rid));
-}
 #endif /* HAVE_KSID */
+}
 
 /*
  * Create a file system FUID for an ACL ace

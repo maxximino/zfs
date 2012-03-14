@@ -2657,6 +2657,7 @@ top:
 		 * secpolicy_vnode_setattr() doesn't revoke it.
 		 */
 
+		 saved_mask=0; //initialize this or the compiler complains now that secpolicy_vnode_setattr is a real function.
 		if (trim_mask) {
 			saved_mask = vap->va_mask;
 			vap->va_mask &= ~trim_mask;
