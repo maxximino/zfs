@@ -2338,8 +2338,7 @@ zfs_zaccess_common(znode_t *zp, uint32_t v4_mode, uint32_t *working_mode,
 	int err;
 
 	*working_mode = v4_mode;
-//	*check_privs = B_TRUE;
-*check_privs=B_FALSE;  //TODO: UGLY HACK FOR TESTS: this SHOULD BE true!!
+	*check_privs = B_TRUE;
 	/*
 	 * Short circuit empty requests
 	 */
