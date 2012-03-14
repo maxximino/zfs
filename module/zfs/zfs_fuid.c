@@ -754,7 +754,7 @@ zfs_groupmember(zfs_sb_t *zsb, uint64_t id, cred_t *cr)
 	gid = zfs_fuid_map_id(zsb, id, cr, ZFS_GROUP);
 	return (groupmember(gid, cr));
 #else
-	return (B_TRUE);
+	return in_group_p(id)?B_TRUE:B_FALSE;
 #endif
 }
 
