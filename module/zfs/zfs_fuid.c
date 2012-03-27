@@ -513,7 +513,7 @@ zfs_fuid_create_cred(zfs_sb_t *zsb, zfs_fuid_type_t type,
 	ksid = crgetsid(cr, (type == ZFS_OWNER) ? KSID_OWNER : KSID_GROUP);
 
 	if (!zsb->z_use_fuids || (ksid == NULL)) {
-		id = (type == ZFS_OWNER) ? crgetuid(cr) : crgetgid(cr);
+		id = (type == ZFS_OWNER) ? crgetfsuid(cr) : crgetfsgid(cr);
 
 		if (IS_EPHEMERAL(id))
 			return ((type == ZFS_OWNER) ? UID_NOBODY : GID_NOBODY);
@@ -524,7 +524,7 @@ zfs_fuid_create_cred(zfs_sb_t *zsb, zfs_fuid_type_t type,
 	/*
 	 * ksid is present and FUID is supported
 	 */
-	id = (type == ZFS_OWNER) ? ksid_getid(ksid) : crgetgid(cr);
+	id = (type == ZFS_OWNER) ? ksid_getid(ksid) : crgetfsgid(cr);
 
 	if (!IS_EPHEMERAL(id))
 		return ((uint64_t)id);

@@ -1789,7 +1789,7 @@ zfs_acl_ids_create(znode_t *dzp, int flag, vattr_t *vap, cred_t *cr,
 			} else {
 				acl_ids->z_fgid = zfs_fuid_create_cred(zsb,
 				    ZFS_GROUP, cr, &acl_ids->z_fuidp);
-				gid = crgetgid(cr);
+				gid = crgetfsgid(cr);
 			}
 		}
 	}
@@ -2198,7 +2198,7 @@ zfs_zaccess_aces_check(znode_t *zp, uint32_t *working_mode,
 	zfs_sb_t	*zsb = ZTOZSB(zp);
 	zfs_acl_t	*aclp;
 	int		error;
-	uid_t		uid = crgetuid(cr);
+	uid_t		uid = crgetfsuid(cr);
 	uint64_t	who;
 	uint16_t	type, iflags;
 	uint16_t	entry_type;
@@ -2382,7 +2382,7 @@ zfs_fastaccesschk_execute(znode_t *zdp, cred_t *cr)
 	boolean_t owner = B_FALSE;
 	boolean_t groupmbr = B_FALSE;
 	boolean_t is_attr;
-	uid_t uid = crgetuid(cr);
+	uid_t uid = crgetfsuid(cr);
 	int error;
 
 	if (zdp->z_pflags & ZFS_AV_QUARANTINED)
@@ -2507,7 +2507,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 
 	working_mode = mode;
 	if ((working_mode & (ACE_READ_ACL|ACE_READ_ATTRIBUTES)) &&
-	    owner == crgetuid(cr))
+	    owner == crgetfsuid(cr))
 		working_mode &= ~(ACE_READ_ACL|ACE_READ_ATTRIBUTES);
 
 	if (working_mode & (ACE_READ_DATA|ACE_READ_NAMED_ATTRS|
@@ -2549,7 +2549,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 		ASSERT(working_mode != 0);
 
 		if ((working_mode & (ACE_READ_ACL|ACE_READ_ATTRIBUTES) &&
-		    owner == crgetuid(cr)))
+		    owner == crgetfsuid(cr)))
 			working_mode &= ~(ACE_READ_ACL|ACE_READ_ATTRIBUTES);
 
 		if (working_mode & (ACE_READ_DATA|ACE_READ_NAMED_ATTRS|

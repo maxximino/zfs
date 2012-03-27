@@ -892,7 +892,7 @@ zfs_secpolicy_userspace_one(zfs_cmd_t *zc, cred_t *cr)
 		 */
 		if (zc->zc_objset_type == ZFS_PROP_USERUSED ||
 		    zc->zc_objset_type == ZFS_PROP_USERQUOTA) {
-			if (zc->zc_guid == crgetuid(cr))
+			if (zc->zc_guid == crgetfsuid(cr)) 
 				return (0);
 		} else {
 			if (groupmember(zc->zc_guid, cr))

@@ -176,8 +176,8 @@ zfs_create_share_dir(zfs_sb_t *zsb, dmu_tx_t *tx)
 
 	vattr.va_mask = AT_MODE|AT_UID|AT_GID|AT_TYPE;
 	vattr.va_mode = S_IFDIR | 0555;
-	vattr.va_uid = crgetuid(kcred);
-	vattr.va_gid = crgetgid(kcred);
+	vattr.va_uid = crgetfsuid(kcred);
+	vattr.va_gid = crgetfsgid(kcred);
 
 	sharezp = kmem_cache_alloc(znode_cache, KM_PUSHPAGE);
 	sharezp->z_moved = 0;
@@ -1499,8 +1499,8 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 	 */
 	vattr.va_mask = ATTR_MODE|ATTR_UID|ATTR_GID;
 	vattr.va_mode = S_IFDIR|0755;
-	vattr.va_uid = crgetuid(cr);
-	vattr.va_gid = crgetgid(cr);
+	vattr.va_uid = crgetfsuid(cr);
+	vattr.va_gid = crgetfsgid(cr);
 
 	rootzp = kmem_cache_alloc(znode_cache, KM_SLEEP);
 	rootzp->z_moved = 0;

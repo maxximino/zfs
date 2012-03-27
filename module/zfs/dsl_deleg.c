@@ -131,7 +131,7 @@ dsl_deleg_can_unallow(char *ddname, nvlist_t *nvp, cred_t *cr)
 		return (error);
 
 	(void) snprintf(idstr, sizeof (idstr), "%lld",
-	    (longlong_t)crgetuid(cr));
+	    (longlong_t)crgeteuid(cr));
 
 	while ((whopair = nvlist_next_nvpair(nvp, whopair))) {
 		zfs_deleg_who_type_t type = nvpair_name(whopair)[0];
@@ -432,13 +432,13 @@ dsl_check_user_access(objset_t *mos, uint64_t zapobj, const char *perm,
 	uint64_t id;
 
 	/* check for user */
-	id = crgetuid(cr);
+	id = crgeteuid(cr);
 	if (dsl_check_access(mos, zapobj,
 	    ZFS_DELEG_USER, checkflag, &id, perm) == 0)
 		return (0);
 
 	/* check for users primary group */
-	id = crgetgid(cr);
+	id = crgetegid(cr);
 	if (dsl_check_access(mos, zapobj,
 	    ZFS_DELEG_GROUP, checkflag, &id, perm) == 0)
 		return (0);
@@ -513,11 +513,11 @@ dsl_load_user_sets(objset_t *mos, uint64_t zapobj, avl_tree_t *avl,
 	int	ngids, i;
 	uint64_t id;
 
-	id = crgetuid(cr);
+	id = crgeteuid(cr);
 	(void) dsl_load_sets(mos, zapobj,
 	    ZFS_DELEG_USER_SETS, checkflag, &id, avl);
 
-	id = crgetgid(cr);
+	id = crgetegid(cr);
 	(void) dsl_load_sets(mos, zapobj,
 	    ZFS_DELEG_GROUP_SETS, checkflag, &id, avl);
 
@@ -711,7 +711,7 @@ void
 dsl_deleg_set_create_perms(dsl_dir_t *sdd, dmu_tx_t *tx, cred_t *cr)
 {
 	dsl_dir_t *dd;
-	uint64_t uid = crgetuid(cr);
+	uint64_t uid = crgeteuid(cr);
 
 	if (spa_version(dmu_objset_spa(sdd->dd_pool->dp_meta_objset)) <
 	    SPA_VERSION_DELEGATED_PERMS)

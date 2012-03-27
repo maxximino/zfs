@@ -1217,8 +1217,8 @@ zfs_create(struct inode *dip, char *name, vattr_t *vap, int excl,
 	 * make sure file system is at proper version
 	 */
 
-	gid = crgetgid(cr);
-	uid = crgetuid(cr);
+	gid = crgetfsgid(cr);
+	uid = crgetfsuid(cr);
 
 	if (zsb->z_use_fuids == B_FALSE &&
 	    (vsecp || IS_EPHEMERAL(uid) || IS_EPHEMERAL(gid)))
@@ -1237,7 +1237,7 @@ zfs_create(struct inode *dip, char *name, vattr_t *vap, int excl,
 
 	if (vap->va_mask & ATTR_XVATTR) {
 		if ((error = secpolicy_xvattr((xvattr_t *)vap,
-		    crgetuid(cr), cr, vap->va_mode)) != 0) {
+		    crgetfsuid(cr), cr, vap->va_mode)) != 0) {
 			ZFS_EXIT(zsb);
 			return (error);
 		}
@@ -1639,7 +1639,7 @@ zfs_mkdir(struct inode *dip, char *dirname, vattr_t *vap, struct inode **ipp,
 	int		error;
 	int		zf = ZNEW;
 	uid_t		uid;
-	gid_t		gid = crgetgid(cr);
+	gid_t		gid = crgetfsgid(cr);
 	zfs_acl_ids_t   acl_ids;
 	boolean_t	fuid_dirtied;
 
@@ -1650,7 +1650,7 @@ zfs_mkdir(struct inode *dip, char *dirname, vattr_t *vap, struct inode **ipp,
 	 * make sure file system is at proper version
 	 */
 
-	uid = crgetuid(cr);
+	uid = crgetfsuid(cr);
 	if (zsb->z_use_fuids == B_FALSE &&
 	    (vsecp || IS_EPHEMERAL(uid) || IS_EPHEMERAL(gid)))
 		return (EINVAL);
@@ -1674,7 +1674,7 @@ zfs_mkdir(struct inode *dip, char *dirname, vattr_t *vap, struct inode **ipp,
 
 	if (vap->va_mask & ATTR_XVATTR) {
 		if ((error = secpolicy_xvattr((xvattr_t *)vap,
-		    crgetuid(cr), cr, vap->va_mode)) != 0) {
+		    crgetfsuid(cr), cr, vap->va_mode)) != 0) {
 			ZFS_EXIT(zsb);
 			return (error);
 		}
@@ -2139,7 +2139,7 @@ zfs_getattr(struct inode *ip, vattr_t *vap, int flags, cred_t *cr)
 	 * always be allowed to read basic attributes of file.
 	 */
 	if (!(zp->z_pflags & ZFS_ACL_TRIVIAL) &&
-	    (vap->va_uid != crgetuid(cr))) {
+	    (vap->va_uid != crgetfsuid(cr))) {
 		if ((error = zfs_zaccess(zp, ACE_READ_ATTRIBUTES, 0,
 		    skipaclchk, cr))) {
 			ZFS_EXIT(zsb);
@@ -2516,7 +2516,7 @@ top:
 		 * Take ownership or chgrp to group we are a member of
 		 */
 
-		take_owner = (mask & ATTR_UID) && (vap->va_uid == crgetuid(cr));
+		take_owner = (mask & ATTR_UID) && (vap->va_uid == crgetfsuid(cr));
 		take_group = (mask & ATTR_GID) &&
 		    zfs_groupmember(zsb, vap->va_gid, cr);
 
@@ -3688,7 +3688,7 @@ zfs_link(struct inode *tdip, struct inode *sip, char *name, cred_t *cr)
 	}
 
 	owner = zfs_fuid_map_id(zsb, szp->z_uid, cr, ZFS_OWNER);
-	if (owner != crgetuid(cr) && secpolicy_basic_link(cr) != 0) {
+	if (owner != crgetfsuid(cr) && secpolicy_basic_link(cr) != 0) {
 		ZFS_EXIT(zsb);
 		return (EPERM);
 	}
