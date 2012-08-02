@@ -21,9 +21,8 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-/*
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2011 by Delphix. All rights reserved.
  */
 
 /*
@@ -572,6 +571,43 @@ spa_prop_clear_bootfs(spa_t *spa, uint64_t dsobj, dmu_tx_t *tx)
 }
 
 /*
+ * Change the GUID for the pool.  This is done so that we can later
+ * re-import a pool built from a clone of our own vdevs.  We will modify
+ * the root vdev's guid, our own pool guid, and then mark all of our
+ * vdevs dirty.  Note that we must make sure that all our vdevs are
+ * online when we do this, or else any vdevs that weren't present
+ * would be orphaned from our pool.  We are also going to issue a
+ * sysevent to update any watchers.
+ */
+int
+spa_change_guid(spa_t *spa)
+{
+	uint64_t	oldguid, newguid;
+	uint64_t	txg;
+
+	if (!(spa_mode_global & FWRITE))
+		return (EROFS);
+
+	txg = spa_vdev_enter(spa);
+
+	if (spa->spa_root_vdev->vdev_state != VDEV_STATE_HEALTHY)
+		return (spa_vdev_exit(spa, NULL, txg, ENXIO));
+
+	oldguid = spa_guid(spa);
+	newguid = spa_generate_guid(NULL);
+	ASSERT3U(oldguid, !=, newguid);
+
+	spa->spa_root_vdev->vdev_guid = newguid;
+	spa->spa_root_vdev->vdev_guid_sum += (newguid - oldguid);
+
+	vdev_config_dirty(spa->spa_root_vdev);
+
+	spa_event_notify(spa, NULL, FM_EREPORT_ZFS_POOL_REGUID);
+
+	return (spa_vdev_exit(spa, NULL, txg, 0));
+}
+
+/*
  * ==========================================================================
  * SPA state manipulation (open/create/destroy/import/export)
  * ==========================================================================
@@ -1007,8 +1043,10 @@ spa_unload(spa_t *spa)
 	}
 	spa->spa_spares.sav_count = 0;
 
-	for (i = 0; i < spa->spa_l2cache.sav_count; i++)
+	for (i = 0; i < spa->spa_l2cache.sav_count; i++) {
+		vdev_clear_stats(spa->spa_l2cache.sav_vdevs[i]);
 		vdev_free(spa->spa_l2cache.sav_vdevs[i]);
+	}
 	if (spa->spa_l2cache.sav_vdevs) {
 		kmem_free(spa->spa_l2cache.sav_vdevs,
 		    spa->spa_l2cache.sav_count * sizeof (void *));
@@ -1231,11 +1269,13 @@ spa_load_l2cache(spa_t *spa)
 
 		vd = oldvdevs[i];
 		if (vd != NULL) {
+			ASSERT(vd->vdev_isl2cache);
+
 			if (spa_l2cache_exists(vd->vdev_guid, &pool) &&
 			    pool != 0ULL && l2arc_vdev_present(vd))
 				l2arc_remove_vdev(vd);
-			(void) vdev_close(vd);
-			spa_l2cache_remove(vd);
+			vdev_clear_stats(vd);
+			vdev_free(vd);
 		}
 	}
 
@@ -1769,7 +1809,7 @@ spa_load(spa_t *spa, spa_load_state_t state, spa_import_type_t type,
 	    spa_guid_exists(pool_guid, 0)) {
 		error = EEXIST;
 	} else {
-		spa->spa_load_guid = pool_guid;
+		spa->spa_config_guid = pool_guid;
 
 		if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_SPLIT,
 		    &nvl) == 0) {
@@ -1882,7 +1922,7 @@ spa_load_impl(spa_t *spa, uint64_t pool_guid, nvlist_t *config,
 	 */
 	if (type != SPA_IMPORT_ASSEMBLE) {
 		spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
-		error = vdev_validate(rvd);
+		error = vdev_validate(rvd, mosconfig);
 		spa_config_exit(spa, SCL_ALL, FTAG);
 
 		if (error != 0)
@@ -2743,6 +2783,7 @@ spa_validate_aux_devs(spa_t *spa, nvlist_t *nvroot, uint64_t crtxg, int mode,
 		if ((strcmp(config, ZPOOL_CONFIG_L2CACHE) == 0) &&
 		    strcmp(vd->vdev_ops->vdev_op_type, VDEV_TYPE_DISK) != 0) {
 			error = ENOTBLK;
+			vdev_free(vd);
 			goto out;
 		}
 #endif
@@ -2852,10 +2893,6 @@ spa_l2cache_drop(spa_t *spa)
 		if (spa_l2cache_exists(vd->vdev_guid, &pool) &&
 		    pool != 0ULL && l2arc_vdev_present(vd))
 			l2arc_remove_vdev(vd);
-		if (vd->vdev_isl2cache)
-			spa_l2cache_remove(vd);
-		vdev_clear_stats(vd);
-		(void) vdev_close(vd);
 	}
 }
 
@@ -3851,7 +3888,7 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing)
 	pvd = oldvd->vdev_parent;
 
 	if ((error = spa_config_parse(spa, &newrootvd, nvroot, NULL, 0,
-	    VDEV_ALLOC_ADD)) != 0)
+	    VDEV_ALLOC_ATTACH)) != 0)
 		return (spa_vdev_exit(spa, NULL, txg, EINVAL));
 
 	if (newrootvd->vdev_children != 1)

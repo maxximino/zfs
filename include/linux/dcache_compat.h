@@ -29,5 +29,10 @@
 #include <linux/dcache.h>
 
 #define dname(dentry)	((char *)((dentry)->d_name.name))
+#define dlen(dentry)	((int)((dentry)->d_name.len))
+
+#ifndef HAVE_D_MAKE_ROOT
+#define d_make_root(inode)	d_alloc_root(inode)
+#endif /* HAVE_D_MAKE_ROOT */
 
 #endif /* _ZFS_DCACHE_H */

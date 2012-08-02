@@ -1861,6 +1861,7 @@ dmu_init(void)
 	dnode_init();
 	dbuf_init();
 	zfetch_init();
+	dmu_tx_init();
 	arc_init();
 	l2arc_init();
 }
@@ -1870,6 +1871,7 @@ dmu_fini(void)
 {
 	l2arc_fini();
 	arc_fini();
+	dmu_tx_fini();
 	zfetch_fini();
 	dbuf_fini();
 	dnode_fini();
@@ -1898,4 +1900,7 @@ EXPORT_SYMBOL(dmu_return_arcbuf);
 EXPORT_SYMBOL(dmu_assign_arcbuf);
 EXPORT_SYMBOL(dmu_buf_hold);
 EXPORT_SYMBOL(dmu_ot);
+
+module_param(zfs_mdcomp_disable, int, 0644);
+MODULE_PARM_DESC(zfs_mdcomp_disable, "Disable meta data compression");
 #endif

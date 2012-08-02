@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2012 by Frederik Wessels. All rights reserved.
  */
 
 #include <assert.h>
@@ -65,6 +68,8 @@ static int zpool_do_status(int, char **);
 static int zpool_do_online(int, char **);
 static int zpool_do_offline(int, char **);
 static int zpool_do_clear(int, char **);
+
+static int zpool_do_reguid(int, char **);
 
 static int zpool_do_attach(int, char **);
 static int zpool_do_detach(int, char **);
@@ -125,7 +130,8 @@ typedef enum {
 	HELP_EVENTS,
 	HELP_GET,
 	HELP_SET,
-	HELP_SPLIT
+	HELP_SPLIT,
+	HELP_REGUID
 } zpool_help_t;
 
 
@@ -169,6 +175,7 @@ static zpool_command_t command_table[] = {
 	{ "import",	zpool_do_import,	HELP_IMPORT		},
 	{ "export",	zpool_do_export,	HELP_EXPORT		},
 	{ "upgrade",	zpool_do_upgrade,	HELP_UPGRADE		},
+	{ "reguid",	zpool_do_reguid,	HELP_REGUID		},
 	{ NULL },
 	{ "history",	zpool_do_history,	HELP_HISTORY		},
 	{ "events",	zpool_do_events,	HELP_EVENTS		},
@@ -251,6 +258,8 @@ get_usage(zpool_help_t idx) {
 		return (gettext("\tsplit [-n] [-R altroot] [-o mntopts]\n"
 		    "\t    [-o property=value] <pool> <newpool> "
 		    "[<device> ...]\n"));
+	case HELP_REGUID:
+		return (gettext("\treguid <pool>\n"));
 	}
 
 	abort();
@@ -2086,16 +2095,46 @@ print_vdev_stats(zpool_handle_t *zhp, const char *name, nvlist_t *oldnv,
 		return;
 
 	for (c = 0; c < children; c++) {
-		uint64_t ishole = B_FALSE;
+		uint64_t ishole = B_FALSE, islog = B_FALSE;
 
-		if (nvlist_lookup_uint64(newchild[c],
-		    ZPOOL_CONFIG_IS_HOLE, &ishole) == 0 && ishole)
+		(void) nvlist_lookup_uint64(newchild[c], ZPOOL_CONFIG_IS_HOLE,
+		    &ishole);
+
+		(void) nvlist_lookup_uint64(newchild[c], ZPOOL_CONFIG_IS_LOG,
+		    &islog);
+
+		if (ishole || islog)
 			continue;
 
 		vname = zpool_vdev_name(g_zfs, zhp, newchild[c], B_FALSE);
 		print_vdev_stats(zhp, vname, oldnv ? oldchild[c] : NULL,
 		    newchild[c], cb, depth + 2);
 		free(vname);
+	}
+
+	/*
+	 * Log device section
+	 */
+
+	if (num_logs(newnv) > 0) {
+		(void) printf("%-*s      -      -      -      -      -      "
+		    "-\n", cb->cb_namewidth, "logs");
+
+		for (c = 0; c < children; c++) {
+			uint64_t islog = B_FALSE;
+			(void) nvlist_lookup_uint64(newchild[c],
+			    ZPOOL_CONFIG_IS_LOG, &islog);
+
+			if (islog) {
+				vname = zpool_vdev_name(g_zfs, zhp, newchild[c],
+				    B_FALSE);
+				print_vdev_stats(zhp, vname, oldnv ?
+				    oldchild[c] : NULL, newchild[c],
+				    cb, depth + 2);
+				free(vname);
+			}
+		}
+
 	}
 
 	/*
@@ -2175,11 +2214,30 @@ print_iostat(zpool_handle_t *zhp, void *data)
 	return (0);
 }
 
+static int
+get_columns(void)
+{
+	struct winsize ws;
+	int columns = 80;
+	int error;
+
+	if (isatty(STDOUT_FILENO)) {
+		error = ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
+		if (error == 0)
+			columns = ws.ws_col;
+	} else {
+		columns = 999;
+	}
+
+	return columns;
+}
+
 int
 get_namewidth(zpool_handle_t *zhp, void *data)
 {
 	iostat_cbdata_t *cb = data;
 	nvlist_t *config, *nvroot;
+	int columns;
 
 	if ((config = zpool_get_config(zhp, NULL)) != NULL) {
 		verify(nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE,
@@ -2187,17 +2245,20 @@ get_namewidth(zpool_handle_t *zhp, void *data)
 		if (!cb->cb_verbose)
 			cb->cb_namewidth = strlen(zpool_get_name(zhp));
 		else
-			cb->cb_namewidth = max_width(zhp, nvroot, 0, 0);
+			cb->cb_namewidth = max_width(zhp, nvroot, 0,
+			    cb->cb_namewidth);
 	}
 
 	/*
-	 * The width must fall into the range [10,38].  The upper limit is the
-	 * maximum we can have and still fit in 80 columns.
+	 * The width must be at least 10, but may be as large as the
+	 * column width - 42 so that we can still fit in one line.
 	 */
+	columns = get_columns();
+
 	if (cb->cb_namewidth < 10)
 		cb->cb_namewidth = 10;
-	if (cb->cb_namewidth > 38)
-		cb->cb_namewidth = 38;
+	if (cb->cb_namewidth > columns - 42)
+		cb->cb_namewidth = columns - 42;
 
 	return (0);
 }
@@ -2358,7 +2419,7 @@ zpool_do_iostat(int argc, char **argv)
 		pool_list_update(list);
 
 		if ((npools = pool_list_count(list)) == 0)
-			(void) printf(gettext("no pools available\n"));
+			(void) fprintf(stderr, gettext("no pools available\n"));
 		else {
 			/*
 			 * Refresh all statistics.  This is done as an
@@ -2599,7 +2660,7 @@ zpool_do_list(int argc, char **argv)
 		    list_callback, &cb);
 
 		if (argc == 0 && cb.cb_first)
-			(void) printf(gettext("no pools available\n"));
+			(void) fprintf(stderr, gettext("no pools available\n"));
 		else if (argc && cb.cb_first) {
 			/* cannot open the given pool */
 			zprop_free_list(cb.cb_proplist);
@@ -3150,6 +3211,52 @@ zpool_do_clear(int argc, char **argv)
 
 	return (ret);
 }
+
+/*
+ * zpool reguid <pool>
+ */
+int
+zpool_do_reguid(int argc, char **argv)
+{
+	int c;
+	char *poolname;
+	zpool_handle_t *zhp;
+	int ret = 0;
+
+	/* check options */
+	while ((c = getopt(argc, argv, "")) != -1) {
+		switch (c) {
+		case '?':
+			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
+			    optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	/* get pool name and check number of arguments */
+	if (argc < 1) {
+		(void) fprintf(stderr, gettext("missing pool name\n"));
+		usage(B_FALSE);
+	}
+
+	if (argc > 1) {
+		(void) fprintf(stderr, gettext("too many arguments\n"));
+		usage(B_FALSE);
+	}
+
+	poolname = argv[0];
+	if ((zhp = zpool_open(g_zfs, poolname)) == NULL)
+		return (1);
+
+	ret = zpool_reguid(zhp);
+
+	zpool_close(zhp);
+	return (ret);
+}
+
 
 typedef struct scrub_cbdata {
 	int	cb_type;
@@ -3793,7 +3900,7 @@ zpool_do_status(int argc, char **argv)
 		    status_callback, &cb);
 
 		if (argc == 0 && cb.cb_count == 0)
-			(void) printf(gettext("no pools available\n"));
+			(void) fprintf(stderr, gettext("no pools available\n"));
 		else if (cb.cb_explain && cb.cb_first && cb.cb_allpools)
 			(void) printf(gettext("all pools are healthy\n"));
 
@@ -4219,7 +4326,7 @@ zpool_do_history(int argc, char **argv)
 	    &cbdata);
 
 	if (argc == 0 && cbdata.first == B_TRUE) {
-		(void) printf(gettext("no pools available\n"));
+		(void) fprintf(stderr, gettext("no pools available\n"));
 		return (0);
 	}
 

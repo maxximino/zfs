@@ -25,6 +25,7 @@
 
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_vnops.h>
+#include <sys/zfs_znode.h>
 #include <sys/vfs.h>
 #include <sys/zpl.h>
 #include <sys/acl.h>
@@ -52,9 +53,9 @@ zpl_lookup(struct inode *dir, struct dentry *dentry, struct nameidata *nd)
 	return d_splice_alias(ip, dentry);
 }
 
-static void
+void
 zpl_vap_init(vattr_t *vap, struct inode *dir, struct dentry *dentry,
-    mode_t mode, cred_t *cr)
+    zpl_umode_t mode, cred_t *cr)
 {
 	vap->va_mask = ATTR_MODE;
 	vap->va_mode = mode;
@@ -71,7 +72,7 @@ zpl_vap_init(vattr_t *vap, struct inode *dir, struct dentry *dentry,
 }
 
 static int
-zpl_create(struct inode *dir, struct dentry *dentry, int mode,
+zpl_create(struct inode *dir, struct dentry *dentry, zpl_umode_t mode,
     struct nameidata *nd)
 {
 	cred_t *cr = CRED();
@@ -93,7 +94,8 @@ zpl_create(struct inode *dir, struct dentry *dentry, int mode,
 }
 
 static int
-zpl_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t rdev)
+zpl_mknod(struct inode *dir, struct dentry *dentry, zpl_umode_t mode,
+    dev_t rdev)
 {
 	cred_t *cr = CRED();
 	struct inode *ip;
@@ -136,7 +138,7 @@ zpl_unlink(struct inode *dir, struct dentry *dentry)
 }
 
 static int
-zpl_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+zpl_mkdir(struct inode *dir, struct dentry *dentry, zpl_umode_t mode)
 {
 	cred_t *cr = CRED();
 	vattr_t *vap;
@@ -172,7 +174,19 @@ zpl_rmdir(struct inode * dir, struct dentry *dentry)
 static int
 zpl_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
 {
+	boolean_t issnap = ITOZSB(dentry->d_inode)->z_issnap;
 	int error;
+
+	/*
+	 * Ensure MNT_SHRINKABLE is set on snapshots to ensure they are
+	 * unmounted automatically with the parent file system.  This
+	 * is done on the first getattr because it's not easy to get the
+	 * vfsmount structure at mount time.  This call path is explicitly
+	 * marked unlikely to avoid any performance impact.  FWIW, ext4
+	 * resorts to a similar trick for sysadmin convenience.
+	 */
+	if (unlikely(issnap && !(mnt->mnt_flags & MNT_SHRINKABLE)))
+		mnt->mnt_flags |= MNT_SHRINKABLE;
 
 	error = -zfs_getattr_fast(dentry->d_inode, stat);
 	ASSERT3S(error, <=, 0);
@@ -281,9 +295,8 @@ zpl_follow_link(struct dentry *dentry, struct nameidata *nd)
 static void
 zpl_put_link(struct dentry *dentry, struct nameidata *nd, void *ptr)
 {
-	char *link;
+	const char *link = nd_get_link(nd);
 
-	link = nd_get_link(nd);
 	if (!IS_ERR(link))
 		kmem_free(link, MAXPATHLEN);
 }
@@ -316,6 +329,7 @@ out:
 	return (error);
 }
 
+#ifdef HAVE_INODE_TRUNCATE_RANGE
 static void
 zpl_truncate_range(struct inode* ip, loff_t start, loff_t end)
 {
@@ -342,6 +356,7 @@ zpl_truncate_range(struct inode* ip, loff_t start, loff_t end)
 
 	crfree(cr);
 }
+#endif /* HAVE_INODE_TRUNCATE_RANGE */
 
 #ifdef HAVE_INODE_FALLOCATE
 static long
@@ -392,8 +407,10 @@ const struct inode_operations zpl_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
-	.truncate_range = zpl_truncate_range,
 	.permission	= zpl_permission,
+#ifdef HAVE_INODE_TRUNCATE_RANGE
+	.truncate_range = zpl_truncate_range,
+#endif /* HAVE_INODE_TRUNCATE_RANGE */
 #ifdef HAVE_INODE_FALLOCATE
 	.fallocate	= zpl_fallocate,
 #endif /* HAVE_INODE_FALLOCATE */

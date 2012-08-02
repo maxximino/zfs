@@ -25,14 +25,20 @@
 
 #include <sys/zfs_vnops.h>
 #include <sys/zfs_znode.h>
+#include <sys/zfs_ctldir.h>
 #include <sys/zpl.h>
 
 
 static int
+#ifdef HAVE_ENCODE_FH_WITH_INODE
+zpl_encode_fh(struct inode *ip, __u32 *fh, int *max_len, struct inode *parent)
+{
+#else
 zpl_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable)
 {
-	fid_t *fid = (fid_t *)fh;
 	struct inode *ip = dentry->d_inode;
+#endif /* HAVE_ENCODE_FH_WITH_INODE */
+	fid_t *fid = (fid_t *)fh;
 	int len_bytes, rc;
 
 	len_bytes = *max_len * sizeof (__u32);
@@ -42,7 +48,10 @@ zpl_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable)
 
 	fid->fid_len = len_bytes - offsetof(fid_t, fid_data);
 
-	rc = zfs_fid(ip, fid);
+	if (zfsctl_is_node(ip))
+		rc = zfsctl_fid(ip, fid);
+	else
+		rc = zfs_fid(ip, fid);
 
 	len_bytes = offsetof(fid_t, fid_data) + fid->fid_len;
 	*max_len = roundup(len_bytes, sizeof (__u32)) / sizeof (__u32);

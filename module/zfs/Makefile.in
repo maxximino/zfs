@@ -1,11 +1,8 @@
 MODULE := zfs
 
-EXTRA_CFLAGS += @KERNELCPPFLAGS@
-EXTRA_CFLAGS += -include @SPL_OBJ@/spl_config.h
-EXTRA_CFLAGS += -include @abs_top_builddir@/zfs_config.h
-EXTRA_CFLAGS += -I@abs_top_srcdir@/include -I@SPL@/include -I@SPL@
+EXTRA_CFLAGS = $(ZFS_MODULE_CFLAGS) @KERNELCPPFLAGS@
 
-obj-m := $(MODULE).o
+obj-$(CONFIG_ZFS) := $(MODULE).o
 
 $(MODULE)-objs += @top_srcdir@/module/zfs/acl_common.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/acl_translator.o
@@ -66,6 +63,7 @@ $(MODULE)-objs += @top_srcdir@/module/zfs/zap_leaf.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zap_micro.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zfs_acl.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zfs_byteswap.o
+$(MODULE)-objs += @top_srcdir@/module/zfs/zfs_ctldir.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zfs_debug.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zfs_dir.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zfs_fm.o
@@ -85,6 +83,7 @@ $(MODULE)-objs += @top_srcdir@/module/zfs/zio_checksum.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zio_compress.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zio_inject.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zle.o
+$(MODULE)-objs += @top_srcdir@/module/zfs/zpl_ctldir.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_export.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_file.o
 $(MODULE)-objs += @top_srcdir@/module/zfs/zpl_inode.o
