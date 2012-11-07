@@ -73,6 +73,7 @@ char *zio_type_name[ZIO_TYPES] = {
  */
 kmem_cache_t *zio_cache;
 kmem_cache_t *zio_link_cache;
+kmem_cache_t *zio_vdev_cache;
 kmem_cache_t *zio_buf_cache[SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT];
 kmem_cache_t *zio_data_buf_cache[SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT];
 int zio_bulk_flags = 0;
@@ -141,6 +142,8 @@ zio_init(void)
 	    zio_cons, zio_dest, NULL, NULL, NULL, KMC_KMEM);
 	zio_link_cache = kmem_cache_create("zio_link_cache",
 	    sizeof (zio_link_t), 0, NULL, NULL, NULL, NULL, NULL, KMC_KMEM);
+	zio_vdev_cache = kmem_cache_create("zio_vdev_cache", sizeof(vdev_io_t),
+	    PAGESIZE, NULL, NULL, NULL, NULL, NULL, KMC_VMEM);
 
 	/*
 	 * For small buffers, we want a cache for each multiple of
@@ -230,6 +233,7 @@ zio_fini(void)
 		zio_data_buf_cache[c] = NULL;
 	}
 
+	kmem_cache_destroy(zio_vdev_cache);
 	kmem_cache_destroy(zio_link_cache);
 	kmem_cache_destroy(zio_cache);
 
@@ -255,7 +259,7 @@ zio_buf_alloc(size_t size)
 
 	ASSERT(c < SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
 
-	return (kmem_cache_alloc(zio_buf_cache[c], KM_PUSHPAGE));
+	return (kmem_cache_alloc(zio_buf_cache[c], KM_PUSHPAGE | KM_NODEBUG));
 }
 
 /*
@@ -271,7 +275,8 @@ zio_data_buf_alloc(size_t size)
 
 	ASSERT(c < SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
 
-	return (kmem_cache_alloc(zio_data_buf_cache[c], KM_PUSHPAGE));
+	return (kmem_cache_alloc(zio_data_buf_cache[c],
+	    KM_PUSHPAGE | KM_NODEBUG));
 }
 
 void
@@ -292,6 +297,24 @@ zio_data_buf_free(void *buf, size_t size)
 	ASSERT(c < SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
 
 	kmem_cache_free(zio_data_buf_cache[c], buf);
+}
+
+/*
+ * Dedicated I/O buffers to ensure that memory fragmentation never prevents
+ * or significantly delays the issuing of a zio.   These buffers are used
+ * to aggregate I/O and could be used for raidz stripes.
+ */
+void *
+zio_vdev_alloc(void)
+{
+	return (kmem_cache_alloc(zio_vdev_cache, KM_PUSHPAGE));
+}
+
+void
+zio_vdev_free(void *buf)
+{
+	kmem_cache_free(zio_vdev_cache, buf);
+
 }
 
 /*
@@ -1282,18 +1305,34 @@ __zio_execute(zio_t *zio)
 int
 zio_wait(zio_t *zio)
 {
+	uint64_t timeout;
 	int error;
 
 	ASSERT(zio->io_stage == ZIO_STAGE_OPEN);
 	ASSERT(zio->io_executor == NULL);
 
 	zio->io_waiter = curthread;
+	timeout = ddi_get_lbolt() + (zio_delay_max / MILLISEC * hz);
 
 	__zio_execute(zio);
 
 	mutex_enter(&zio->io_lock);
-	while (zio->io_executor != NULL)
-		cv_wait(&zio->io_cv, &zio->io_lock);
+	while (zio->io_executor != NULL) {
+		/*
+		 * Wake up periodically to prevent the kernel from complaining
+		 * about a blocked task.  However, check zio_delay_max to see
+		 * if the I/O has exceeded the timeout and post an ereport.
+		 */
+		cv_timedwait_interruptible(&zio->io_cv, &zio->io_lock,
+		    ddi_get_lbolt() + hz);
+
+		if (timeout && (ddi_get_lbolt() > timeout)) {
+			zio->io_delay = zio_delay_max;
+			zfs_ereport_post(FM_EREPORT_ZFS_DELAY,
+			    zio->io_spa, zio->io_vd, zio, 0, 0);
+			timeout = 0;
+		}
+	}
 	mutex_exit(&zio->io_lock);
 
 	error = zio->io_error;
@@ -1838,6 +1877,11 @@ zio_write_gang_block(zio_t *pio)
 	 */
 	pio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
 
+	/*
+	 * We didn't allocate this bp, so make sure it doesn't get unmarked.
+	 */
+	pio->io_flags &= ~ZIO_FLAG_FASTWRITE;
+
 	zio_nowait(zio);
 
 	return (ZIO_PIPELINE_CONTINUE);
@@ -2247,6 +2291,7 @@ zio_dva_allocate(zio_t *zio)
 	flags |= (zio->io_flags & ZIO_FLAG_NODATA) ? METASLAB_GANG_AVOID : 0;
 	flags |= (zio->io_flags & ZIO_FLAG_GANG_CHILD) ?
 	    METASLAB_GANG_CHILD : 0;
+	flags |= (zio->io_flags & ZIO_FLAG_FASTWRITE) ? METASLAB_FASTWRITE : 0;
 	error = metaslab_alloc(spa, mc, zio->io_size, bp,
 	    zio->io_prop.zp_copies, zio->io_txg, NULL, flags);
 
@@ -2310,8 +2355,8 @@ zio_dva_unallocate(zio_t *zio, zio_gang_node_t *gn, blkptr_t *bp)
  * Try to allocate an intent log block.  Return 0 on success, errno on failure.
  */
 int
-zio_alloc_zil(spa_t *spa, uint64_t txg, blkptr_t *new_bp, blkptr_t *old_bp,
-    uint64_t size, boolean_t use_slog)
+zio_alloc_zil(spa_t *spa, uint64_t txg, blkptr_t *new_bp, uint64_t size,
+    boolean_t use_slog)
 {
 	int error = 1;
 
@@ -2324,14 +2369,14 @@ zio_alloc_zil(spa_t *spa, uint64_t txg, blkptr_t *new_bp, blkptr_t *old_bp,
 	 */
 	if (use_slog) {
 		error = metaslab_alloc(spa, spa_log_class(spa), size,
-		    new_bp, 1, txg, old_bp,
-		    METASLAB_HINTBP_AVOID | METASLAB_GANG_AVOID);
+		    new_bp, 1, txg, NULL,
+		    METASLAB_FASTWRITE | METASLAB_GANG_AVOID);
 	}
 
 	if (error) {
 		error = metaslab_alloc(spa, spa_normal_class(spa), size,
-		    new_bp, 1, txg, old_bp,
-		    METASLAB_HINTBP_AVOID | METASLAB_GANG_AVOID);
+		    new_bp, 1, txg, NULL,
+		    METASLAB_FASTWRITE | METASLAB_GANG_AVOID);
 	}
 
 	if (error == 0) {
@@ -2860,15 +2905,11 @@ zio_done(zio_t *zio)
 	vdev_stat_update(zio, zio->io_size);
 
 	/*
-	 * If this I/O is attached to a particular vdev is slow, exeeding
-	 * 30 seconds to complete, post an error described the I/O delay.
-	 * We ignore these errors if the device is currently unavailable.
+	 * When an I/O completes but was slow post an ereport.
 	 */
-	if (zio->io_delay >= zio_delay_max) {
-		if (zio->io_vd != NULL && !vdev_is_dead(zio->io_vd))
-			zfs_ereport_post(FM_EREPORT_ZFS_DELAY, zio->io_spa,
-                                         zio->io_vd, zio, 0, 0);
-	}
+	if (zio->io_delay >= zio_delay_max)
+		zfs_ereport_post(FM_EREPORT_ZFS_DELAY, zio->io_spa,
+		    zio->io_vd, zio, 0, 0);
 
 	if (zio->io_error) {
 		/*
@@ -3035,6 +3076,11 @@ zio_done(zio_t *zio)
 		zcr->zcr_next = NULL;
 		zcr->zcr_finish(zcr, NULL);
 		zfs_ereport_free_checksum(zcr);
+	}
+
+	if (zio->io_flags & ZIO_FLAG_FASTWRITE && zio->io_bp &&
+	    !BP_IS_HOLE(zio->io_bp)) {
+		metaslab_fastwrite_unmark(zio->io_spa, zio->io_bp);
 	}
 
 	/*

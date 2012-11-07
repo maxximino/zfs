@@ -92,6 +92,7 @@ AC_CONFIG_FILES([
 	cmd/zfs/Makefile
 	cmd/zinject/Makefile
 	cmd/zpool/Makefile
+	cmd/zstreamdump/Makefile
 	cmd/ztest/Makefile
 	cmd/zpios/Makefile
 	cmd/mount_zfs/Makefile
@@ -124,6 +125,7 @@ AC_CONFIG_FILES([
 	PKGBUILD-zfs-modules
 	zfs-script-config.sh
 	zfs.release
+	dkms.conf
 ])
 
 AC_OUTPUT

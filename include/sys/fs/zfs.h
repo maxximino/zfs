@@ -21,8 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -167,8 +168,13 @@ typedef enum {
 	ZPOOL_PROP_ALLOCATED,
 	ZPOOL_PROP_READONLY,
 	ZPOOL_PROP_ASHIFT,
+	ZPOOL_PROP_COMMENT,
+	ZPOOL_PROP_EXPANDSZ,
 	ZPOOL_NUM_PROPS
 } zpool_prop_t;
+
+/* Small enough to not hog a whole line of printout in zpool(1M). */
+#define	ZPROP_MAX_COMMENT	32
 
 #define	ZPROP_CONT		-2
 #define	ZPROP_INVAL		-1
@@ -500,6 +506,7 @@ typedef struct zpool_rewind_policy {
 #define	ZPOOL_CONFIG_SPLIT_LIST		"guid_list"
 #define	ZPOOL_CONFIG_REMOVING		"removing"
 #define	ZPOOL_CONFIG_RESILVERING	"resilvering"
+#define	ZPOOL_CONFIG_COMMENT		"comment"
 #define	ZPOOL_CONFIG_SUSPENDED		"suspended"	/* not stored on disk */
 #define	ZPOOL_CONFIG_TIMESTAMP		"timestamp"	/* not stored on disk */
 #define	ZPOOL_CONFIG_BOOTFS		"bootfs"	/* not stored on disk */
@@ -673,6 +680,7 @@ typedef struct vdev_stat {
 	uint64_t	vs_space;		/* total capacity	*/
 	uint64_t	vs_dspace;		/* deflated capacity	*/
 	uint64_t	vs_rsize;		/* replaceable dev size */
+	uint64_t	vs_esize;		/* expandable dev size */
 	uint64_t	vs_ops[ZIO_TYPES];	/* operation count	*/
 	uint64_t	vs_bytes[ZIO_TYPES];	/* bytes read/written	*/
 	uint64_t	vs_read_errors;		/* read errors		*/
@@ -795,6 +803,8 @@ typedef enum zfs_ioc {
 	ZFS_IOC_POOL_REGUID,
 	ZFS_IOC_SPACE_WRITTEN,
 	ZFS_IOC_SPACE_SNAPS,
+	ZFS_IOC_POOL_REOPEN,
+	ZFS_IOC_SEND_PROGRESS,
 } zfs_ioc_t;
 
 /*
