@@ -230,6 +230,7 @@ int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
     int *maskptr;
     short *firstptr;
     int tmp_mask;
+    int should_show_mask=0;
     ace_t* cur_ace;
     tmp[0].aclent.a_type=USER_OBJ;
     tmp[1].aclent.a_type=GROUP_OBJ;
@@ -241,6 +242,7 @@ int permissive_convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
     for(i=0; i<acecnt; i++) {
         cur_ace=&acebufp[i];
         posixtype = get_posixtype(cur_ace);
+	if(posixtype & (USER|GROUP)){should_show_mask=1;}
 start_mask_iteration:
         idx = lookup_aclent(posixtype,cur_ace->a_who,&tmp,&tmpsize,&usedsize);
         if(tmp[idx].initialized == 1) continue; //interested only in the first of each user/group/etc
@@ -362,21 +364,34 @@ start_calc_iteration:
             goto start_calc_iteration;
         }
     }
-
+    idx=lookup_aclent(CLASS_OBJ,0,&tmp,&tmpsize,&usedsize);
+    if(tmp[idx].aclent.a_perm != 7) {printk("mask aperm=%i",tmp[idx].aclent.a_perm); should_show_mask = 1;}
+    if(!should_show_mask) usedsize --;
+    if(has_default){
+	    idx=lookup_aclent(ACL_DEFAULT|CLASS_OBJ,0,&tmp,&tmpsize,&usedsize);
+	    if(tmp[idx].aclent.a_perm != 7) {printk("default mask perm=%i",tmp[idx].aclent.a_perm); should_show_mask = 1;}
+    	    if(!should_show_mask) usedsize --;
+	}
     printk("1st phase ok. %i elements\n",usedsize);
+    if(!should_show_mask){
+    printk("no mask,no acl, bypass.\n");
+    *retaclcnt=0;
+    return 0;
+    }
+
     ret = (aclent_t*)kzalloc(sizeof(aclent_t)*usedsize,GFP_NOFS);
     cpidx = 0;
     copytype(USER_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(USER,tmp,usedsize,ret,&cpidx);
     copytype(GROUP_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(GROUP,tmp,usedsize,ret,&cpidx);
-    copytype(CLASS_OBJ,tmp,usedsize,ret,&cpidx);
+    if(should_show_mask) copytype(CLASS_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(OTHER_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(ACL_DEFAULT|USER_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(ACL_DEFAULT|USER,tmp,usedsize,ret,&cpidx);
     copytype(ACL_DEFAULT|GROUP_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(ACL_DEFAULT|GROUP,tmp,usedsize,ret,&cpidx);
-    copytype(ACL_DEFAULT|CLASS_OBJ,tmp,usedsize,ret,&cpidx);
+    if(should_show_mask) copytype(ACL_DEFAULT|CLASS_OBJ,tmp,usedsize,ret,&cpidx);
     copytype(ACL_DEFAULT|OTHER_OBJ,tmp,usedsize,ret,&cpidx);
     *retaclentp = ret;
     *retaclcnt=usedsize;

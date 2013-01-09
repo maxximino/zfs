@@ -1192,7 +1192,7 @@ acl_trivial_access_masks(mode_t mode, uint32_t *allow0, uint32_t *deny1,
 		*allow0 |= ACE_EXECUTE;
 
 	*owner = ACE_WRITE_ATTRIBUTES|ACE_WRITE_OWNER|ACE_WRITE_ACL|
-	    ACE_WRITE_NAMED_ATTRS|ACE_READ_ACL|ACE_READ_ATTRIBUTES|
+	    ACE_WRITE_NAMED_ATTRS|ACE_READ_ACL|ACE_READ_ATTRIBUTES| //aggiunto ACE_DELETE by max
 	    ACE_READ_NAMED_ATTRS|ACE_SYNCHRONIZE;
 	if (mode & S_IRUSR)
 		*owner |= ACE_READ_DATA;
@@ -1732,6 +1732,9 @@ zfs_acl_ids_create(znode_t *dzp, int flag, vattr_t *vap, cred_t *cr,
 	boolean_t	inherited = B_FALSE;
 
 	bzero(acl_ids, sizeof (zfs_acl_ids_t));
+	
+	vap->va_mode &= ~current_umask();
+	
 	acl_ids->z_mode = vap->va_mode;
 
 	if (vsecp)
@@ -2731,7 +2734,8 @@ zfs_zaccess_delete(znode_t *dzp, znode_t *zp, cred_t *cr)
 	 */
 
 	if (dzp_error == EACCES)
-		return (secpolicy_vnode_remove(cr));
+		//return (secpolicy_vnode_remove(cr));
+		if(!secpolicy_vnode_remove(cr)) return 0;
 
 	/*
 	 * Third Row

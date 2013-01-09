@@ -83,11 +83,16 @@ static inline int acl_from_vsecattr(acl_t**newacl, vsecattr_t* sa) {
     return 0;
 }
 
-static int posixacl_from_ace(struct posix_acl** newacl,acl_t* acl,int posixacl_type) {
+static int posixacl_from_ace(struct posix_acl** newacl,acl_t* acl,int posixacl_type,int mode) {
     struct posix_acl* pacl = NULL;
     struct posix_acl_entry* pae=NULL;
     aclent_t* ae;
     int idx=0,count=0;
+    if(acl->acl_cnt == 0 && posixacl_type==ACL_TYPE_ACCESS){
+    *newacl = posix_acl_from_mode(mode,GFP_NOFS);
+    return 0;
+    }
+
     ae = acl->acl_aclp;
     //Count the elements we're interested in. access OR default)
     if(posixacl_type==ACL_TYPE_DEFAULT) {
@@ -170,19 +175,20 @@ __zpl_xattr_acl_get(struct inode *ip, const char *name,
     int err;
     acl_t * readacl;
     struct posix_acl* pacl = NULL;
+    if(!S_ISDIR(ip->i_mode) && type==ACL_TYPE_DEFAULT){return -EACCES;}
     err=get_aclents_from_inode(&readacl,ip);
     if(unlikely(err)) {
         return err;
     }
     //Get a Linux-style struct posix_acl from the acl_t containing aclent_t
-    err=posixacl_from_ace(&pacl,readacl,type);
+    err=posixacl_from_ace(&pacl,readacl,type,ip->i_mode);
     if(unlikely(err)) {
         acl_free(readacl);
         return err;
     }
     acl_free(readacl);
     err=posix_acl_to_xattr(pacl,value,size);
-// posix_acl_release(pacl); // GPL-only !!!!!!!!!!
+    posix_acl_release(pacl); // GPL-only !!!!!!!!!!
     return err;
 }
 
@@ -311,27 +317,45 @@ __zpl_xattr_acl_set(struct inode *ip, const char *name,
     if(unlikely(!inode_owner_or_capable(ip))) {
         return -EPERM;
     }
-    if(unlikely(!value)) {
+    /*if(unlikely(!value)) {
         return -EINVAL;
+    }*/
+    /* if size == 0....remove the ACL! */
+    if(size > 0)   {
+	    acl = posix_acl_from_xattr(value, size);
+	    if(unlikely(IS_ERR(acl))) {
+		return PTR_ERR(acl);
+	    }
+	    if(unlikely(!acl)) {
+		return -EINVAL;
+	    }
+	    err = posix_acl_valid(acl);
+	    if(unlikely(err)) {
+		//Free acl. see posix_acl_release problem.
+		return -EINVAL;
+	    }
+	    if(posix_acl_equiv_mode(acl,NULL)>0){
+	    
+	    
+		    err=aclent_from_posixacl(&newacl,acl,type);
+		    if(unlikely(err)) {
+			//Free acl. see posix_acl_release problem.
+			return err;
+		    }
+		}
+	else{
+		    newacl = kzalloc(sizeof(acl_t),GFP_KERNEL);
+	    newacl->acl_type=ACE_T;
+	    newacl->acl_cnt=0;
+
+	}
+	posix_acl_release(acl); // GPL-only !!!!!!!!!!
     }
-    acl = posix_acl_from_xattr(value, size);
-    if(unlikely(IS_ERR(acl))) {
-        return PTR_ERR(acl);
+    else{
+	    newacl = kzalloc(sizeof(acl_t),GFP_KERNEL);
+	    newacl->acl_type=ACE_T;
+	    newacl->acl_cnt=0;
     }
-    if(unlikely(!acl)) {
-        return -EINVAL;
-    }
-    err = posix_acl_valid(acl);
-    if(unlikely(err)) {
-        //Free acl. see posix_acl_release problem.
-        return -EINVAL;
-    }
-    err=aclent_from_posixacl(&newacl,acl,type);
-    if(unlikely(err)) {
-        //Free acl. see posix_acl_release problem.
-        return err;
-    }
-// posix_acl_release(acl); // GPL-only !!!!!!!!!!
     //if it is a directory, it has an ACCESS and a DEFAULT acl. In the posix ACL we have only one of them,but in the acl_t we should put them both.
     //So get the missing part!
     if(S_ISDIR(ip->i_mode)) {
@@ -371,6 +395,10 @@ printk("What the fuck?"); return -1;
         return err;
     }
     printk("Translation of new acl succeeded.\n");
+    if(newacl->acl_cnt==0){
+    acl_trivial_create(ip->i_mode, S_ISDIR(ip->i_mode), &newacl->acl_aclp,&newacl->acl_cnt);
+
+    }
     err=write_nfsv4_acl(ip,newacl);
     acl_free(newacl);
     if(unlikely(err)) {
