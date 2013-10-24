@@ -60,6 +60,7 @@ typedef struct zfs_sb {
 	struct zfs_fuid_info	*z_fuid_replay; /* fuid info for replay */
 	zilog_t		*z_log;		/* intent log pointer */
 	uint_t		z_acl_inherit;	/* acl inheritance behavior */
+	uint_t		z_acl_type;	/* type of ACL usable on this FS */
 	zfs_case_t	z_case;		/* case-sense */
 	boolean_t	z_utf8;		/* utf8-only */
 	int		z_norm;		/* normalization flags */
@@ -95,6 +96,7 @@ typedef struct zfs_sb {
 #define	ZFS_SUPER_MAGIC	0x2fc12fc1
 
 #define	ZSB_XATTR	0x0001		/* Enable user xattrs */
+#define ZSB_POSIX_ACL	0x0002		/* Enable posix acls */
 
 /*
  * Allow a maximum number of links.  While ZFS does not internally limit

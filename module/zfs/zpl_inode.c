@@ -102,8 +102,8 @@ zpl_create(struct inode *dir, struct dentry *dentry, zpl_umode_t mode,
 
 	error = -zfs_create(dir, dname(dentry), vap, 0, mode, &ip, cr, 0, NULL);
 	if (error == 0) {
-		error = zpl_xattr_security_init(ip, dir, &dentry->d_name);
-		VERIFY3S(error, ==, 0);
+		(void) zpl_xattr_security_init(ip, dir, &dentry->d_name);
+		(void) zpl_init_acl(ip, dir);
 		d_instantiate(dentry, ip);
 	}
 
@@ -136,8 +136,10 @@ zpl_mknod(struct inode *dir, struct dentry *dentry, zpl_umode_t mode,
 	vap->va_rdev = rdev;
 
 	error = -zfs_create(dir, dname(dentry), vap, 0, mode, &ip, cr, 0, NULL);
-	if (error == 0)
+	if (error == 0) {
 		d_instantiate(dentry, ip);
+		(void) zpl_init_acl(ip, dir);
+	}
 
 	kmem_free(vap, sizeof(vattr_t));
 	crfree(cr);
@@ -173,8 +175,10 @@ zpl_mkdir(struct inode *dir, struct dentry *dentry, zpl_umode_t mode)
 	zpl_vap_init(vap, dir, mode | S_IFDIR, cr);
 
 	error = -zfs_mkdir(dir, dname(dentry), vap, &ip, cr, 0, NULL);
-	if (error == 0)
+	if (error == 0) {
 		d_instantiate(dentry, ip);
+		(void) zpl_init_acl(ip, dir);
+	}
 
 	kmem_free(vap, sizeof(vattr_t));
 	crfree(cr);
@@ -223,11 +227,12 @@ zpl_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
 static int
 zpl_setattr(struct dentry *dentry, struct iattr *ia)
 {
+	struct inode *ip = dentry->d_inode;
 	cred_t *cr = CRED();
 	vattr_t *vap;
 	int error;
 
-	error = inode_change_ok(dentry->d_inode, ia);
+	error = inode_change_ok(ip, ia);
 	if (error)
 		return (error);
 
@@ -242,7 +247,9 @@ zpl_setattr(struct dentry *dentry, struct iattr *ia)
 	vap->va_mtime = ia->ia_mtime;
 	vap->va_ctime = ia->ia_ctime;
 
-	error = -zfs_setattr(dentry->d_inode, vap, 0, cr);
+	error = -zfs_setattr(ip, vap, 0, cr);
+	if (!error && (ia->ia_valid & ATTR_MODE))
+		error = zpl_chmod_acl(ip);
 
 	kmem_free(vap, sizeof(vattr_t));
 	crfree(cr);
@@ -279,8 +286,10 @@ zpl_symlink(struct inode *dir, struct dentry *dentry, const char *name)
 	zpl_vap_init(vap, dir, S_IFLNK | S_IRWXUGO, cr);
 
 	error = -zfs_symlink(dir, dname(dentry), vap, (char *)name, &ip, cr, 0);
-	if (error == 0)
+	if (error == 0) {
 		d_instantiate(dentry, ip);
+		(void) zpl_init_acl(ip, dir);
+	}
 
 	kmem_free(vap, sizeof(vattr_t));
 	crfree(cr);
@@ -455,6 +464,15 @@ const struct inode_operations zpl_inode_operations = {
 #ifdef HAVE_INODE_FALLOCATE
 	.fallocate	= zpl_fallocate,
 #endif /* HAVE_INODE_FALLOCATE */
+#ifdef HAVE_GET_ACL
+	.get_acl	= zpl_get_acl,
+#else
+#ifdef HAVE_CHECK_ACL
+	.check_acl	= zpl_check_acl,
+#else
+	.permission	= zpl_permission,
+#endif /* HAVE_CHECK_ACL */
+#endif /* HAVE_GET_ACL */
 };
 
 const struct inode_operations zpl_dir_inode_operations = {
@@ -473,6 +491,15 @@ const struct inode_operations zpl_dir_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+#ifdef HAVE_GET_ACL
+	.get_acl	= zpl_get_acl,
+#else
+#ifdef HAVE_CHECK_ACL
+	.check_acl	= zpl_check_acl,
+#else
+	.permission	= zpl_permission,
+#endif /* HAVE_CHECK_ACL */
+#endif /* HAVE_GET_ACL */
 };
 
 const struct inode_operations zpl_symlink_inode_operations = {
@@ -485,6 +512,15 @@ const struct inode_operations zpl_symlink_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+#ifdef HAVE_GET_ACL
+	.get_acl	= zpl_get_acl,
+#else
+#ifdef HAVE_CHECK_ACL
+	.check_acl	= zpl_check_acl,
+#else
+	.permission	= zpl_permission,
+#endif /* HAVE_CHECK_ACL */
+#endif /* HAVE_GET_ACL */
 };
 
 const struct inode_operations zpl_special_inode_operations = {
@@ -494,6 +530,15 @@ const struct inode_operations zpl_special_inode_operations = {
 	.getxattr	= generic_getxattr,
 	.removexattr	= generic_removexattr,
 	.listxattr	= zpl_xattr_list,
+#ifdef HAVE_GET_ACL
+	.get_acl	= zpl_get_acl,
+#else
+#ifdef HAVE_CHECK_ACL
+	.check_acl	= zpl_check_acl,
+#else
+	.permission	= zpl_permission,
+#endif /* HAVE_CHECK_ACL */
+#endif /* HAVE_GET_ACL */
 };
 
 dentry_operations_t zpl_dentry_operations = {
