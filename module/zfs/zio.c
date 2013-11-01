@@ -293,6 +293,26 @@ zio_data_buf_alloc(size_t size)
 	    KM_PUSHPAGE | KM_NODEBUG));
 }
 
+boolean_t
+zio_buf_needs_reassign(void *buf, size_t size)
+{
+	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
+
+	ASSERT(c < SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
+
+	return spl_kmem_needs_reassign(zio_buf_cache[c], buf);
+}
+
+boolean_t
+zio_data_buf_needs_reassign(void *buf, size_t size)
+{
+	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
+
+	ASSERT(c < SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
+
+	return spl_kmem_needs_reassign(zio_data_buf_cache[c], buf);
+}
+
 void
 zio_buf_free(void *buf, size_t size)
 {

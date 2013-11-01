@@ -144,10 +144,12 @@
 #include <sys/kstat.h>
 #include <sys/dmu_tx.h>
 #include <zfs_fletcher.h>
+#include <linux/sched.h>
 
 static kmutex_t		arc_reclaim_thr_lock;
 static kcondvar_t	arc_reclaim_thr_cv;	/* used to signal reclaim thr */
 static uint8_t		arc_thread_exit;
+static uint8_t		arc_defrag_thread_exit;
 
 /* number of bytes to prune from caches when at arc_meta_limit is reached */
 int zfs_arc_meta_prune = 1048576;
@@ -194,7 +196,7 @@ static boolean_t arc_warm;
 unsigned long zfs_arc_max = 0;
 unsigned long zfs_arc_min = 0;
 unsigned long zfs_arc_meta_limit = 0;
-
+unsigned long zfs_arc_dfrg_randmodulus=1000;
 /*
  * Note that buffers can be in one of 6 states:
  *	ARC_anon	- anonymous (discussed below)
@@ -327,6 +329,21 @@ typedef struct arc_stats {
 	kstat_named_t arcstat_meta_used;
 	kstat_named_t arcstat_meta_limit;
 	kstat_named_t arcstat_meta_max;
+	kstat_named_t arcstat_dfrg_mfu_data;
+	kstat_named_t arcstat_dfrg_mfu_mdata;
+	kstat_named_t arcstat_dfrg_mru_data;
+	kstat_named_t arcstat_dfrg_mru_mdata;
+	kstat_named_t arcstat_dfrg_reason_arcs_mtx;
+	kstat_named_t arcstat_dfrg_reason_reclaim_thr_lock;
+	kstat_named_t arcstat_dfrg_reason_io_in_progress;
+	kstat_named_t arcstat_dfrg_reason_not_in_hash;
+	kstat_named_t arcstat_dfrg_reason_hashlock;
+	kstat_named_t arcstat_dfrg_reason_refcount_not_zero;
+	kstat_named_t arcstat_dfrg_reason_age;
+	kstat_named_t arcstat_dfrg_reason_eviction_mtx;
+	kstat_named_t arcstat_dfrg_reason_b_evict_lock;
+	kstat_named_t arcstat_dfrg_moved;
+	kstat_named_t arcstat_dfrg_checked;
 } arc_stats_t;
 
 static arc_stats_t arc_stats = {
@@ -414,6 +431,21 @@ static arc_stats_t arc_stats = {
 	{ "arc_meta_used",		KSTAT_DATA_UINT64 },
 	{ "arc_meta_limit",		KSTAT_DATA_UINT64 },
 	{ "arc_meta_max",		KSTAT_DATA_UINT64 },
+	{ "arc_dfrg_mfu_data",		KSTAT_DATA_UINT64 },
+	{ "arc_dfrg_mfu_mdata",		KSTAT_DATA_UINT64 },
+	{ "arc_dfrg_mru_data",		KSTAT_DATA_UINT64 },
+	{ "arc_dfrg_mru_mdata",		KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_arcs_mtx",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_reclaim_thr_lock",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_io_in_progress",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_not_in_hash",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_hashlock",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_refcount_not_zero",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_age",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_eviction_mtx",	KSTAT_DATA_UINT64 },
+	{ "dfrg_reason_b_evict_lock",	KSTAT_DATA_UINT64 },
+	{ "dfrg_moved",	KSTAT_DATA_UINT64 },
+	{ "dfrg_checked",	KSTAT_DATA_UINT64 },
 };
 
 #define	ARCSTAT(stat)	(arc_stats.stat.value.ui64)
@@ -547,7 +579,7 @@ static kmutex_t arc_prune_mtx;
 static arc_buf_t *arc_eviction_list;
 static kmutex_t arc_eviction_mtx;
 static arc_buf_hdr_t arc_eviction_hdr;
-static void arc_get_data_buf(arc_buf_t *buf);
+static void arc_get_data_buf(arc_buf_t *buf,boolean_t force_new);
 static void arc_access(arc_buf_hdr_t *buf, kmutex_t *hash_lock);
 static int arc_evict_needed(arc_buf_contents_t type);
 static void arc_evict_ghost(arc_state_t *state, uint64_t spa, int64_t bytes,
@@ -1305,7 +1337,7 @@ arc_buf_alloc(spa_t *spa, int size, void *tag, arc_buf_contents_t type)
 	buf->b_private = NULL;
 	buf->b_next = NULL;
 	hdr->b_buf = buf;
-	arc_get_data_buf(buf);
+	arc_get_data_buf(buf,FALSE);
 	hdr->b_datacnt = 1;
 	hdr->b_flags = 0;
 	ASSERT(refcount_is_zero(&hdr->b_refcnt));
@@ -1365,7 +1397,7 @@ arc_loan_inuse_buf(arc_buf_t *buf, void *tag)
 }
 
 static arc_buf_t *
-arc_buf_clone(arc_buf_t *from)
+arc_buf_clone(arc_buf_t *from,boolean_t force_new)
 {
 	arc_buf_t *buf;
 	arc_buf_hdr_t *hdr = from->b_hdr;
@@ -1380,7 +1412,7 @@ arc_buf_clone(arc_buf_t *from)
 	buf->b_private = NULL;
 	buf->b_next = hdr->b_buf;
 	hdr->b_buf = buf;
-	arc_get_data_buf(buf);
+	arc_get_data_buf(buf,force_new);
 	bcopy(from->b_data, buf->b_data, size);
 
 	/*
@@ -2220,6 +2252,140 @@ arc_kmem_reap_now(arc_reclaim_strategy_t strat, uint64_t bytes)
 	kmem_cache_reap_now(buf_cache);
 	kmem_cache_reap_now(hdr_cache);
 }
+#define MOVE_RESCHED 10
+static boolean_t needs_reassign(arc_buf_t *buf){
+ASSERT(buf->b_data != NULL);
+switch(buf->b_hdr->b_type){
+	case ARC_BUFC_DATA:
+		return zio_data_buf_needs_reassign(buf->b_data,buf->b_hdr->b_size);
+	case ARC_BUFC_METADATA:
+		return zio_buf_needs_reassign(buf->b_data,buf->b_hdr->b_size);
+	default:
+		return FALSE; //WTF?
+}
+}
+
+static int arc_defrag_list(arc_state_t* state, int type,int upto){
+ int moved=0;
+	arc_buf_hdr_t *ab,*ab_prev=NULL;
+	arc_buf_t *oldbuf,*newbuf,**bufp;
+	kmutex_t *hash_lock;
+	list_t *list = &state->arcs_list[type];
+	ASSERT(list != NULL);
+if(upto==0){return 0;}
+if(!mutex_tryenter(&state->arcs_mtx)){
+
+ARCSTAT_BUMP(arcstat_dfrg_reason_arcs_mtx);
+return 0;}
+if (!mutex_tryenter(&arc_reclaim_thr_lock)){mutex_exit(&state->arcs_mtx);
+
+ARCSTAT_BUMP(arcstat_dfrg_reason_reclaim_thr_lock);
+ return 0;}
+ for(ab=list_tail(list); ab; ab=ab_prev){
+	ASSERT(ab != NULL);
+	ab_prev=list_prev(list,ab);
+	if(HDR_IO_IN_PROGRESS(ab)){ 
+ARCSTAT_BUMP(arcstat_dfrg_reason_io_in_progress);
+continue;}
+	if(!HDR_IN_HASH_TABLE(ab)){
+ARCSTAT_BUMP(arcstat_dfrg_reason_not_in_hash);
+ continue;}
+	hash_lock=HDR_LOCK(ab);
+	ASSERT(hash_lock != NULL);
+	if(!mutex_tryenter(hash_lock)){
+
+ARCSTAT_BUMP(arcstat_dfrg_reason_hashlock);
+continue;}
+	//TODO:Looking only at the first buffer. :(
+	oldbuf=ab->b_buf;
+	if(oldbuf == NULL){mutex_exit(hash_lock); continue; }
+	if(oldbuf->b_data == NULL){mutex_exit(hash_lock); continue; }
+	if(!refcount_is_zero(&oldbuf->b_hdr->b_refcnt)){mutex_exit(hash_lock);
+
+ARCSTAT_BUMP(arcstat_dfrg_reason_refcount_not_zero);
+ continue; }
+	if((ddi_get_lbolt() - oldbuf->b_hdr->b_arc_access) < ARC_MINTIME ){mutex_exit(hash_lock);
+
+ARCSTAT_BUMP(arcstat_dfrg_reason_age);
+ continue; }
+ARCSTAT_BUMP(arcstat_dfrg_checked);
+	if(needs_reassign(oldbuf)){
+		if (oldbuf->b_efunc) {
+			if(!mutex_tryenter(&arc_eviction_mtx)){mutex_exit(hash_lock);
+ARCSTAT_BUMP(arcstat_dfrg_reason_eviction_mtx);
+continue;}
+			if(!mutex_tryenter(&oldbuf->b_evict_lock)){
+ARCSTAT_BUMP(arcstat_dfrg_reason_b_evict_lock);
+				mutex_exit(&arc_eviction_mtx);
+				mutex_exit(hash_lock);
+				continue;
+				}
+		newbuf=arc_buf_clone(oldbuf,TRUE);
+		ASSERT(newbuf != NULL);
+
+			ASSERT(oldbuf->b_hdr != NULL);
+			arc_buf_destroy(oldbuf, FALSE, FALSE);
+for (bufp = &oldbuf->b_hdr->b_buf; *bufp != oldbuf; bufp = &(*bufp)->b_next)
+	continue;
+*bufp = oldbuf->b_next;
+			oldbuf->b_hdr = &arc_eviction_hdr;
+			oldbuf->b_next = arc_eviction_list;
+			arc_eviction_list = oldbuf;
+			mutex_exit(&oldbuf->b_evict_lock);
+			mutex_exit(&arc_eviction_mtx);
+		} else {
+			newbuf=arc_buf_clone(oldbuf,TRUE);
+		ASSERT(newbuf != NULL);
+
+			arc_buf_destroy(oldbuf, FALSE, TRUE);
+		}
+
+		moved++;
+ARCSTAT_BUMP(arcstat_dfrg_moved);
+	}
+	mutex_exit(hash_lock);
+	if(moved>=upto){break;}
+ }
+  mutex_exit(&arc_reclaim_thr_lock);	
+  mutex_exit(&state->arcs_mtx);	
+  return moved;
+}
+extern unsigned long msleep_interruptible(unsigned int msecs);
+static void
+arc_defrag_thread(void)
+{
+	int moved;
+		set_user_nice(current,19);
+	while (arc_defrag_thread_exit == 0) {
+		moved = 0;
+		switch(spa_get_random(zfs_arc_dfrg_randmodulus)){
+		case 0:
+		arc_defrag_list(arc_mfu,ARC_BUFC_DATA,MOVE_RESCHED - moved);
+		ARCSTAT_BUMP(arcstat_dfrg_mfu_data);
+		break;
+		case 1:
+		arc_defrag_list(arc_mfu,ARC_BUFC_METADATA,MOVE_RESCHED - moved);
+		ARCSTAT_BUMP(arcstat_dfrg_mfu_mdata);
+		break;
+		case 2:
+		arc_defrag_list(arc_mru,ARC_BUFC_DATA,MOVE_RESCHED - moved);
+		ARCSTAT_BUMP(arcstat_dfrg_mru_data);
+		break;
+		case 3:
+		arc_defrag_list(arc_mru,ARC_BUFC_METADATA,MOVE_RESCHED - moved);
+
+		ARCSTAT_BUMP(arcstat_dfrg_mru_mdata);
+}
+		msleep_interruptible(20);
+	}
+
+	arc_defrag_thread_exit = 0;
+	thread_exit();
+}
+
+
+
+
 
 /*
  * Unlike other ZFS implementations this thread is only responsible for
@@ -2540,7 +2706,7 @@ arc_evict_needed(arc_buf_contents_t type)
  * this situation, we must victimize our own cache, the MFU, for this insertion.
  */
 static void
-arc_get_data_buf(arc_buf_t *buf)
+arc_get_data_buf(arc_buf_t *buf,boolean_t force_new)
 {
 	arc_state_t		*state = buf->b_hdr->b_state;
 	uint64_t		size = buf->b_hdr->b_size;
@@ -2552,7 +2718,7 @@ arc_get_data_buf(arc_buf_t *buf)
 	 * We have not yet reached cache maximum size,
 	 * just allocate a new buffer.
 	 */
-	if (!arc_evict_needed(type)) {
+	if (force_new || !arc_evict_needed(type)) {
 		if (type == ARC_BUFC_METADATA) {
 			buf->b_data = zio_buf_alloc(size);
 			arc_space_consume(size, ARC_SPACE_DATA);
@@ -2851,7 +3017,7 @@ arc_read_done(zio_t *zio)
 		if (acb->acb_done) {
 			if (abuf == NULL) {
 				ARCSTAT_BUMP(arcstat_duplicate_reads);
-				abuf = arc_buf_clone(buf);
+				abuf = arc_buf_clone(buf,FALSE);
 			}
 			acb->acb_buf = abuf;
 			abuf = NULL;
@@ -2998,7 +3164,7 @@ top:
 				ASSERT(buf->b_efunc == NULL);
 				hdr->b_flags &= ~ARC_BUF_AVAILABLE;
 			} else {
-				buf = arc_buf_clone(buf);
+				buf = arc_buf_clone(buf,FALSE);
 			}
 
 		} else if (*arc_flags & ARC_PREFETCH &&
@@ -3080,7 +3246,7 @@ top:
 			hdr->b_buf = buf;
 			ASSERT(hdr->b_datacnt == 0);
 			hdr->b_datacnt = 1;
-			arc_get_data_buf(buf);
+			arc_get_data_buf(buf,FALSE);
 			arc_access(hdr, hash_lock);
 		}
 
@@ -3899,6 +4065,7 @@ arc_init(void)
 	buf_init();
 
 	arc_thread_exit = 0;
+	arc_defrag_thread_exit = 0;
 	list_create(&arc_prune_list, sizeof (arc_prune_t),
 	    offsetof(arc_prune_t, p_node));
 	arc_eviction_list = NULL;
@@ -3916,6 +4083,9 @@ arc_init(void)
 	}
 
 	(void) thread_create(NULL, 0, arc_adapt_thread, NULL, 0, &p0,
+	    TS_RUN, minclsyspri);
+
+	(void) thread_create(NULL, 0, arc_defrag_thread, NULL, 0, &p0,
 	    TS_RUN, minclsyspri);
 
 	arc_dead = FALSE;
@@ -3939,6 +4109,8 @@ arc_fini(void)
 #endif /* _KERNEL */
 
 	arc_thread_exit = 1;
+	arc_defrag_thread_exit = 1;
+	//TODO: locking
 	while (arc_thread_exit != 0)
 		cv_wait(&arc_reclaim_thr_cv, &arc_reclaim_thr_lock);
 	mutex_exit(&arc_reclaim_thr_lock);
@@ -5314,6 +5486,11 @@ EXPORT_SYMBOL(arc_buf_remove_ref);
 EXPORT_SYMBOL(arc_getbuf_func);
 EXPORT_SYMBOL(arc_add_prune_callback);
 EXPORT_SYMBOL(arc_remove_prune_callback);
+
+module_param(zfs_arc_dfrg_randmodulus, ulong, 0644);
+MODULE_PARM_DESC(zfs_arc_dfrg_randmodulus, "modulus for random in defrag");
+
+
 
 module_param(zfs_arc_min, ulong, 0644);
 MODULE_PARM_DESC(zfs_arc_min, "Min arc size");
