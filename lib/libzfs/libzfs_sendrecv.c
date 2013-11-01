@@ -1333,6 +1333,7 @@ again:
 		}
 
 		zhp = zfs_open(rzhp->zfs_hdl, fsname, ZFS_TYPE_DATASET);
+		fprintf(stderr,"zhp1=%p\n",zhp);
 		if (zhp == NULL)
 			return (-1);
 		err = dump_filesystem(zhp, sdd);
@@ -1394,13 +1395,14 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 
 	(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
 	    "cannot send '%s'"), zhp->zfs_name);
-
+fprintf(stderr,"A\n");
 	if (fromsnap && fromsnap[0] == '\0') {
 		zfs_error_aux(zhp->zfs_hdl, dgettext(TEXT_DOMAIN,
 		    "zero-length incremental source"));
 		return (zfs_error(zhp->zfs_hdl, EZFS_NOENT, errbuf));
 	}
 
+fprintf(stderr,"B\n");
 	if (zhp->zfs_type == ZFS_TYPE_FILESYSTEM) {
 		uint64_t version;
 		version = zfs_prop_get_int(zhp, ZFS_PROP_VERSION);
@@ -1409,6 +1411,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 		}
 	}
 
+fprintf(stderr,"C\n");
 	if (flags->dedup && !flags->dryrun) {
 		featureflags |= (DMU_BACKUP_FEATURE_DEDUP |
 		    DMU_BACKUP_FEATURE_DEDUPPROPS);
@@ -1429,6 +1432,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 		}
 	}
 
+fprintf(stderr,"D\n");
 	if (flags->replicate || flags->doall || flags->props) {
 		dmu_replay_record_t drr = { 0 };
 		char *packbuf = NULL;
@@ -1467,6 +1471,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 			}
 		}
 
+fprintf(stderr,"E\n");
 		if (!flags->dryrun) {
 			/* write first begin record */
 			drr.drr_type = DRR_BEGIN;
@@ -1510,6 +1515,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 		}
 	}
 
+fprintf(stderr,"F\n");
 	/* dump each stream */
 	sdd.fromsnap = fromsnap;
 	sdd.tosnap = tosnap;
@@ -1531,6 +1537,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	if (debugnvp)
 		sdd.debugnv = *debugnvp;
 
+fprintf(stderr,"G\n");
 	/*
 	 * Some flags require that we place user holds on the datasets that are
 	 * being sent so they don't get destroyed during the send. We can skip
@@ -1553,6 +1560,8 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	} else {
 		sdd.cleanup_fd = -1;
 	}
+
+fprintf(stderr,"H\n");
 	if (flags->verbose) {
 		/*
 		 * Do a verbose no-op dry run to get all the verbose output
@@ -1573,10 +1582,12 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 			    "total estimated size is %s\n"), buf);
 		}
 	}
+
+fprintf(stderr,"I\n");
 	err = dump_filesystems(zhp, &sdd);
 	fsavl_destroy(fsavl);
 	nvlist_free(fss);
-
+fprintf(stderr,"I err=%i\n",err);
 	if (flags->dedup) {
 		(void) close(pipefd[0]);
 		(void) pthread_join(tid, NULL);
